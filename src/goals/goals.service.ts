@@ -78,6 +78,26 @@ export class GoalsService {
       .single();
 
     if (error) throw new BadRequestException(error.message);
+
+    // Buscar categoría "Otros" para registrar el gasto
+    const { data: categoria } = await supabase
+      .from('categorias')
+      .select('id')
+      .eq('nombre', 'Otros')
+      .single();
+
+    if (categoria) {
+      // Registrar como movimiento de gasto para que descuente del saldo disponible
+      await supabase.from('movimientos').insert([{
+        usuario_id: userId,
+        categoria_id: categoria.id,
+        tipo: 'GASTO',
+        monto: dto.aporte,
+        descripcion: `Aporte a meta: ${goal.nombre}`,
+        fecha: new Date().toISOString().split('T')[0]
+      }]);
+    }
+
     return data;
   }
 
