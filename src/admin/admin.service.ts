@@ -208,106 +208,214 @@ export class AdminService {
     await this.verifyRole(adminId);
     const supabase = this.supabaseService.getClient();
 
-    // Fetch all raw data in parallel
-    const [usuarios, movs, presupuestos, metas, analisis] = await Promise.all([
-      supabase.from('usuarios').select('nombre, correo, rol, trabaja, ingreso_mensual, gasto_estimado').eq('rol', 'ESTUDIANTE'),
-      supabase.from('movimientos').select('monto, tipo, descripcion, fecha, categorias(nombre), usuarios(nombre)'),
-      supabase.from('presupuestos').select('limite_monto, categorias(nombre), usuarios(nombre)'),
-      supabase.from('metas_ahorro').select('nombre, monto_objetivo, monto_actual, fecha_objetivo, usuarios(nombre)'),
-      supabase.from('analisis_financiero').select('puntaje_financiero, nivel_riesgo, usuarios(nombre)').order('fecha_creacion', { ascending: false }),
+    const [usuarios, movs, presupuestos, metas, analisis, grupos, alertasData] = await Promise.all([
+      supabase.from('usuarios').select('id, nombre, correo, trabaja, ingreso_mensual, gasto_estimado, fecha_registro').eq('rol', 'ESTUDIANTE'),
+      supabase.from('movimientos').select('usuario_id, monto, tipo, fecha, categorias(nombre), usuarios(nombre)'),
+      supabase.from('presupuestos').select('usuario_id, limite_monto, categorias(nombre), usuarios(nombre)'),
+      supabase.from('metas_ahorro').select('usuario_id, nombre, monto_objetivo, monto_actual, fecha_objetivo, usuarios(nombre)'),
+      supabase.from('analisis_financiero').select('usuario_id, puntaje_financiero, nivel_riesgo, fecha_creacion, usuarios(nombre)').order('fecha_creacion', { ascending: false }),
+      supabase.from('grupos_gastos').select('id', { count: 'exact', head: true }),
+      supabase.from('alertas').select('id', { count: 'exact', head: true }),
     ]);
-
-    if (usuarios.error) throw new BadRequestException(`Error en tabla usuarios: ${usuarios.error.message}`);
-    if (movs.error) throw new BadRequestException(`Error en tabla movimientos: ${movs.error.message}`);
-    if (presupuestos.error) throw new BadRequestException(`Error en tabla presupuestos: ${presupuestos.error.message}`);
-    if (metas.error) throw new BadRequestException(`Error en tabla metas: ${metas.error.message}`);
 
     if (!usuarios.data || usuarios.data.length === 0) {
-      throw new BadRequestException('No hay estudiantes registrados. No se puede generar el reporte Excel sin datos.');
+      throw new BadRequestException('No hay estudiantes registrados para generar el reporte.');
     }
 
-    // Calculate KPIs for insight sheets
-    const [biz, fin] = await Promise.all([
-      this.getBusinessKPIs(adminId),
-      this.getFinancialKPIs(adminId),
-    ]);
+    // ── Precálculos ──────────────────────────────────────────────────────────
+    const gastoPorUsuario: Record<string, number> = {};
+    const gastoPorCategoria: Record<string, number> = {};
+    const ingresoTotal: Record<string, number> = {};
 
+    for (const m of movs.data || []) {
+      const amt = Number(m.monto);
+      const cat = (m.categorias as any)?.nombre || 'Otros';
+      if (m.tipo === 'GASTO') {
+        gastoPorUsuario[m.usuario_id] = (gastoPorUsuario[m.usuario_id] || 0) + amt;
+        gastoPorCategoria[cat] = (gastoPorCategoria[cat] || 0) + amt;
+      } else {
+        ingresoTotal[m.usuario_id] = (ingresoTotal[m.usuario_id] || 0) + amt;
+      }
+    }
+
+    // Último análisis por usuario
+    const lastAnalisis: Record<string, any> = {};
+    for (const a of analisis.data || []) {
+      if (!lastAnalisis[a.usuario_id]) lastAnalisis[a.usuario_id] = a;
+    }
+
+    // Funcionalidades con métricas + motivo
+    const totalMov = (movs.data || []).length;
+    const totalPres = (presupuestos.data || []).length;
+    const totalMetas = (metas.data || []).length;
+    const totalGrupos = grupos.count || 0;
+    const totalAlertas = alertasData.count || 0;
+
+    const funcionalidades = [
+      { Funcionalidad: 'Registro de Movimientos', Uso_Total: totalMov, Motivo_Popularidad: 'Necesidad diaria de controlar ingresos y gastos. Es la acción financiera más frecuente.' },
+      { Funcionalidad: 'Presupuestos por Categoría', Uso_Total: totalPres, Motivo_Popularidad: 'Permite planificar el gasto mensual de forma estructurada.' },
+      { Funcionalidad: 'Metas de Ahorro', Uso_Total: totalMetas, Motivo_Popularidad: 'Asociada a objetivos concretos como viajes, emergencias o bienes.' },
+      { Funcionalidad: 'Grupos de Gastos Compartidos', Uso_Total: totalGrupos, Motivo_Popularidad: 'Uso colaborativo entre estudiantes para dividir gastos comunes.' },
+      { Funcionalidad: 'Alertas Financieras', Uso_Total: totalAlertas, Motivo_Popularidad: 'Generadas automáticamente por el sistema al detectar comportamientos de riesgo.' },
+    ].sort((a, b) => b.Uso_Total - a.Uso_Total);
+
+    // Gasto estimado vs real por usuario
+    const diffSheet = (usuarios.data || []).map(u => {
+      const est = Number(u.gasto_estimado) || 0;
+      const real = gastoPorUsuario[u.id] || 0;
+      const dif = real - est;
+      const difPct = est > 0 ? parseFloat(((dif / est) * 100).toFixed(1)) : null;
+      return {
+        Nombre: u.nombre,
+        Correo: u.correo,
+        Gasto_Estimado_USD: est,
+        Gasto_Real_USD: parseFloat(real.toFixed(2)),
+        Diferencia_USD: parseFloat(dif.toFixed(2)),
+        Diferencia_Pct: difPct !== null ? `${difPct}%` : 'Sin estimado',
+        Estado: dif > 0 ? 'Gasta MÁS de lo estimado ⚠' : dif < 0 ? 'Gasta MENOS de lo estimado ✔' : 'Gasto en línea con estimado',
+      };
+    });
+
+    // Usuarios en riesgo financiero
+    const riesgoSheet = (usuarios.data || [])
+      .map(u => {
+        const a = lastAnalisis[u.id];
+        return {
+          Nombre: u.nombre,
+          Correo: u.correo,
+          Wally_Score: a?.puntaje_financiero ?? 'Sin datos',
+          Nivel_Riesgo: a?.nivel_riesgo ?? 'Sin análisis',
+          Gasto_Real_USD: parseFloat((gastoPorUsuario[u.id] || 0).toFixed(2)),
+          Gasto_Estimado_USD: Number(u.gasto_estimado) || 0,
+          En_Riesgo: a?.nivel_riesgo === 'RIESGO_FINANCIERO' ? 'SÍ 🔴' : 'NO 🟢',
+        };
+      })
+      .sort((a, b) => {
+        const orden = { 'SÍ 🔴': 0, 'NO 🟢': 1 };
+        return (orden[a.En_Riesgo] ?? 1) - (orden[b.En_Riesgo] ?? 1);
+      });
+
+    // Categorías ordenadas por gasto
+    const categoriasSheet = Object.entries(gastoPorCategoria)
+      .map(([cat, total]) => ({
+        Categoria: cat,
+        Gasto_Total_USD: parseFloat(total.toFixed(2)),
+        Proporcion_Pct: `${parseFloat(((total / Object.values(gastoPorCategoria).reduce((a, b) => a + b, 0)) * 100).toFixed(1))}%`,
+        Recomendacion: total === Math.max(...Object.values(gastoPorCategoria))
+          ? 'Categoría líder: crear alertas específicas y herramientas de control.'
+          : 'Monitorear tendencia mensual.',
+      }))
+      .sort((a, b) => b.Gasto_Total_USD - a.Gasto_Total_USD);
+
+    // Efectividad de metas
+    const metasSheet = (metas.data || []).map(m => {
+      const pct = Number(m.monto_objetivo) > 0
+        ? parseFloat(((Number(m.monto_actual) / Number(m.monto_objetivo)) * 100).toFixed(1))
+        : 0;
+      const completada = Number(m.monto_actual) >= Number(m.monto_objetivo);
+      return {
+        Usuario: (m.usuarios as any)?.nombre || '',
+        Meta: m.nombre,
+        Objetivo_USD: Number(m.monto_objetivo),
+        Acumulado_USD: Number(m.monto_actual),
+        Progreso_Pct: `${pct}%`,
+        Estado: completada ? 'Completada ✅' : pct >= 50 ? 'En progreso 🔄' : 'En inicio 🔵',
+        Fecha_Limite: m.fecha_objetivo,
+      };
+    });
+
+    // Scores por usuario
+    const scoresSheet = (usuarios.data || []).map(u => {
+      const a = lastAnalisis[u.id];
+      const score = a?.puntaje_financiero ?? null;
+      return {
+        Nombre: u.nombre,
+        Correo: u.correo,
+        Wally_Score: score ?? 'Sin datos',
+        Nivel_Riesgo: a?.nivel_riesgo ?? 'Sin análisis',
+        Calificacion: score === null ? 'Sin datos'
+          : score >= 90 ? 'Excelente 🏆'
+          : score >= 70 ? 'Bueno ✔'
+          : score >= 50 ? 'Regular ⚠'
+          : 'Crítico 🔴',
+      };
+    }).sort((a, b) => {
+      const av = typeof a.Wally_Score === 'number' ? a.Wally_Score : -1;
+      const bv = typeof b.Wally_Score === 'number' ? b.Wally_Score : -1;
+      return bv - av;
+    });
+
+    // Tasa de retención
+    const hace30 = new Date(Date.now() - 30 * 86400000).toISOString();
+    const hace60 = new Date(Date.now() - 60 * 86400000).toISOString();
+    const [cur, prev] = await Promise.all([
+      supabase.from('movimientos').select('usuario_id').gte('fecha_creacion', hace30),
+      supabase.from('movimientos').select('usuario_id').gte('fecha_creacion', hace60).lt('fecha_creacion', hace30),
+    ]);
+    const mauCur = new Set((cur.data || []).map(m => m.usuario_id)).size;
+    const mauPrev = new Set((prev.data || []).map(m => m.usuario_id)).size;
+    const retPct = mauPrev === 0 ? 0 : Math.min(100, Math.round((mauCur / mauPrev) * 100));
+
+    const retencionSheet = [
+      { Metrica: 'Usuarios activos últimos 30 días (MAU)', Valor: mauCur },
+      { Metrica: 'Usuarios activos período anterior (MAU prev)', Valor: mauPrev },
+      { Metrica: 'Tasa de Retención (%)', Valor: `${retPct}%` },
+      { Metrica: 'Tasa de Abandono (%)', Valor: `${Math.max(0, 100 - retPct)}%` },
+      { Metrica: 'Interpretación', Valor: retPct >= 60 ? 'Retención saludable. Los usuarios vuelven consistentemente.' : 'Retención baja. Revisar onboarding y flujos clave de la app.' },
+    ];
+
+    // ── Construir workbook ────────────────────────────────────────────────────
     const wb = xlsx.utils.book_new();
 
-    // --- Hoja 1: Usuarios ---
-    xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet(
-      (usuarios.data || []).map(u => ({
-        Nombre: u.nombre, Correo: u.correo, Rol: u.rol,
-        Trabaja: u.trabaja ? 'Sí' : 'No',
-        Ingreso_Mensual: u.ingreso_mensual, Gasto_Estimado: u.gasto_estimado,
-      }))
-    ), 'Usuarios');
+    xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet(funcionalidades.map((f, i) => ({
+      Posicion: i + 1,
+      Funcionalidad: f.Funcionalidad,
+      Uso_Total: f.Uso_Total,
+      Estado: i === 0 ? '⭐ Más utilizada' : i === funcionalidades.length - 1 ? '⚠ Menos utilizada' : 'Intermedia',
+      Motivo: f.Motivo_Popularidad,
+    }))), 'Funciones_Uso');
 
-    // --- Hoja 2: Movimientos ---
+    xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet(diffSheet), 'Gasto_Estimado_vs_Real');
+    xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet(riesgoSheet), 'Usuarios_en_Riesgo');
+    xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet(categoriasSheet), 'Categorias_Mayor_Gasto');
+    xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet(metasSheet), 'Efectividad_Metas');
+    xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet(scoresSheet), 'Puntaje_Financiero');
+    xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet(retencionSheet), 'Tasa_Retencion');
+
+    // Hoja de resumen ejecutivo
+    const [biz, fin] = await Promise.all([this.getBusinessKPIs(adminId), this.getFinancialKPIs(adminId)]);
+    xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet([
+      { Indicador: 'Total Estudiantes Registrados', Valor: biz.usuarios_registrados, Significado: 'Usuarios con rol ESTUDIANTE en la plataforma' },
+      { Indicador: 'Usuarios Activos (MAU)', Valor: biz.usuarios_activos_mensuales, Significado: 'Registraron al menos un movimiento en los últimos 30 días' },
+      { Indicador: 'Tasa de Retención', Valor: `${biz.tasa_retencion}%`, Significado: 'Porcentaje de usuarios que repitieron actividad vs mes anterior' },
+      { Indicador: 'Tasa de Abandono', Valor: `${biz.tasa_abandono}%`, Significado: 'Usuarios que no repitieron actividad comparado con período anterior' },
+      { Indicador: 'Gasto Promedio por Usuario', Valor: `$${fin.gasto_promedio}`, Significado: 'Suma de gastos reales dividida entre todos los estudiantes' },
+      { Indicador: 'Ingreso Promedio por Usuario', Valor: `$${fin.ingreso_promedio}`, Significado: 'Ingresos registrados divididos entre el total de estudiantes' },
+      { Indicador: 'Usuarios en Riesgo Financiero', Valor: fin.usuarios_en_riesgo, Significado: 'Usuarios con nivel RIESGO_FINANCIERO en su último análisis' },
+      { Indicador: 'Diferencia Gasto Estimado vs Real', Valor: `${fin.diferencia_estimado_real_pct > 0 ? '+' : ''}${fin.diferencia_estimado_real_pct}%`, Significado: 'Promedio de desviación entre lo estimado al registro y el gasto real' },
+      { Indicador: 'Metas Completadas', Valor: `${fin.metas_completadas} / ${fin.total_metas}`, Significado: 'Metas donde el monto_actual alcanzó el monto_objetivo' },
+      { Indicador: 'Wally Score Promedio', Valor: `${fin.wally_score_promedio}/100`, Significado: 'Promedio del puntaje financiero de todos los usuarios analizados' },
+      { Indicador: 'Categoría con Mayor Gasto', Valor: fin.top_categorias[0]?.nombre || 'N/A', Significado: `Total acumulado: $${fin.top_categorias[0]?.total || 0}` },
+    ]), 'Resumen_Ejecutivo');
+
+    // Datos crudos para referencia
     xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet(
       (movs.data || []).map(m => ({
         Usuario: (m.usuarios as any)?.nombre || '',
-        Monto: m.monto, Tipo: m.tipo, Descripcion: m.descripcion,
-        Fecha: m.fecha, Categoria: (m.categorias as any)?.nombre || '',
+        Monto: m.monto, Tipo: m.tipo, Fecha: m.fecha,
+        Categoria: (m.categorias as any)?.nombre || '',
       }))
-    ), 'Movimientos');
+    ), 'Movimientos_Detalle');
 
-    // --- Hoja 3: Presupuestos ---
     xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet(
-      (presupuestos.data || []).map(p => ({
-        Usuario: (p.usuarios as any)?.nombre || '',
-        Categoria: (p.categorias as any)?.nombre || '',
-        Limite_Monto: p.limite_monto,
+      (usuarios.data || []).map(u => ({
+        Nombre: u.nombre, Correo: u.correo,
+        Trabaja: u.trabaja ? 'Sí' : 'No',
+        Ingreso_Mensual: u.ingreso_mensual,
+        Gasto_Estimado: u.gasto_estimado,
+        Fecha_Registro: u.fecha_registro,
       }))
-    ), 'Presupuestos');
-
-    // --- Hoja 4: Metas de Ahorro ---
-    xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet(
-      (metas.data || []).map(m => ({
-        Usuario: (m.usuarios as any)?.nombre || '',
-        Meta: m.nombre, Objetivo: m.monto_objetivo,
-        Acumulado: m.monto_actual, Fecha_Limite: m.fecha_objetivo,
-      }))
-    ), 'Metas_Ahorro');
-
-    // --- Hoja 5: KPIs de Negocio ---
-    xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet([
-      { Metrica: 'Usuarios Registrados (Estudiantes)', Valor: biz.usuarios_registrados },
-      { Metrica: 'Usuarios Activos Mensuales (MAU)', Valor: biz.usuarios_activos_mensuales },
-      { Metrica: 'Tasa de Retención (%)', Valor: biz.tasa_retencion },
-      { Metrica: 'Tasa de Abandono (%)', Valor: biz.tasa_abandono },
-      ...biz.funcionalidades.map(f => ({ Metrica: `Uso de "${f.name}"`, Valor: f.count })),
-    ]), 'KPIs_Negocio');
-
-    // --- Hoja 6: KPIs Financieros ---
-    xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet([
-      { Metrica: 'Gasto Promedio por Usuario ($)', Valor: fin.gasto_promedio },
-      { Metrica: 'Ingreso Promedio por Usuario ($)', Valor: fin.ingreso_promedio },
-      { Metrica: 'Usuarios en Riesgo Financiero', Valor: fin.usuarios_en_riesgo },
-      { Metrica: 'Diferencia Estimado vs Real (%)', Valor: fin.diferencia_estimado_real_pct },
-      { Metrica: 'Metas Completadas', Valor: fin.metas_completadas },
-      { Metrica: 'Total de Metas', Valor: fin.total_metas },
-      { Metrica: 'Wally Score Promedio (0-100)', Valor: fin.wally_score_promedio },
-      ...fin.top_categorias.map(c => ({ Metrica: `Gasto en categoría "${c.nombre}"`, Valor: c.total })),
-    ]), 'KPIs_Financieros');
-
-    // --- Hoja 7: Wally Scores por Usuario ---
-    xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet(
-      (analisis.data || []).map(a => ({
-        Usuario: (a.usuarios as any)?.nombre || '',
-        Puntaje: a.puntaje_financiero, Nivel_Riesgo: a.nivel_riesgo,
-      }))
-    ), 'Wally_Scores');
-
-    // --- Hoja 8: Insights Estratégicos ---
-    const insights = await this.getStrategicInsights(adminId);
-    xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet(
-      insights.map(ins => ({
-        Insight: ins.titulo,
-        Dato: ins.dato_texto,
-        Accion_Recomendada: ins.decision,
-      }))
-    ), 'Insights_Estrategicos');
+    ), 'Usuarios_Detalle');
 
     const buffer: Buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
     return buffer.toString('base64');
@@ -317,74 +425,250 @@ export class AdminService {
     await this.verifyRole(adminId);
     const supabase = this.supabaseService.getClient();
 
-    const [usuarios, movimientos, presupuestos, metas, analisis] = await Promise.all([
-      supabase.from('usuarios').select('id, nombre, trabaja, ingreso_mensual, gasto_estimado').eq('rol', 'ESTUDIANTE'),
-      supabase.from('movimientos').select('id, usuario_id, monto, tipo, fecha, categorias(nombre), usuarios(nombre)'),
-      supabase.from('presupuestos').select('id, usuario_id, limite_monto, categorias(nombre)'),
-      supabase.from('metas_ahorro').select('id, usuario_id, nombre, monto_objetivo, monto_actual'),
-      supabase.from('analisis_financiero').select('usuario_id, puntaje_financiero, nivel_riesgo, fecha_creacion').order('fecha_creacion', { ascending: false }),
+    const [usuarios, movimientos, presupuestos, metas, analisis, grupos] = await Promise.all([
+      supabase.from('usuarios').select('id, nombre, correo, trabaja, ingreso_mensual, gasto_estimado, fecha_registro').eq('rol', 'ESTUDIANTE'),
+      supabase.from('movimientos').select('id, usuario_id, monto, tipo, fecha, fecha_creacion, categorias(nombre), usuarios(nombre)'),
+      supabase.from('presupuestos').select('id, usuario_id, limite_monto, categorias(nombre), usuarios(nombre)'),
+      supabase.from('metas_ahorro').select('id, usuario_id, nombre, monto_objetivo, monto_actual, fecha_objetivo, fecha_creacion, usuarios(nombre)'),
+      supabase.from('analisis_financiero').select('usuario_id, puntaje_financiero, nivel_riesgo, fecha_creacion, usuarios(nombre)').order('fecha_creacion', { ascending: false }),
+      supabase.from('grupos_gastos').select('id, nombre, creador_id, fecha_creacion'),
     ]);
-
-    if (usuarios.error) throw new BadRequestException(`Error en tabla usuarios: ${usuarios.error.message}`);
-    if (movimientos.error) throw new BadRequestException(`Error en movimientos: ${movimientos.error.message}`);
-    if (presupuestos.error) throw new BadRequestException(`Error en presupuestos: ${presupuestos.error.message}`);
-    if (metas.error) throw new BadRequestException(`Error en metas: ${metas.error.message}`);
 
     if (!usuarios.data || usuarios.data.length === 0) {
-      throw new BadRequestException('No hay estudiantes registrados. No se puede exportar datos para Power BI sin registros.');
+      throw new BadRequestException('No hay estudiantes registrados para exportar a Power BI.');
     }
 
-    const [biz, fin, insights] = await Promise.all([
-      this.getBusinessKPIs(adminId),
-      this.getFinancialKPIs(adminId),
-      this.getStrategicInsights(adminId),
+    // Precálculos
+    const gastoPorUsuario: Record<string, number> = {};
+    const gastoPorCategoria: Record<string, number> = {};
+
+    for (const m of movimientos.data || []) {
+      const amt = Number(m.monto);
+      const cat = (m.categorias as any)?.nombre || 'Otros';
+      if (m.tipo === 'GASTO') {
+        gastoPorUsuario[m.usuario_id] = (gastoPorUsuario[m.usuario_id] || 0) + amt;
+        gastoPorCategoria[cat] = (gastoPorCategoria[cat] || 0) + amt;
+      }
+    }
+
+    const lastAnalisis: Record<string, any> = {};
+    for (const a of analisis.data || []) {
+      if (!lastAnalisis[a.usuario_id]) lastAnalisis[a.usuario_id] = a;
+    }
+
+    // Tasa de retención
+    const hace30 = new Date(Date.now() - 30 * 86400000).toISOString();
+    const hace60 = new Date(Date.now() - 60 * 86400000).toISOString();
+    const [cur, prev] = await Promise.all([
+      supabase.from('movimientos').select('usuario_id').gte('fecha_creacion', hace30),
+      supabase.from('movimientos').select('usuario_id').gte('fecha_creacion', hace60).lt('fecha_creacion', hace30),
     ]);
+    const mauCur = new Set((cur.data || []).map(m => m.usuario_id)).size;
+    const mauPrev = new Set((prev.data || []).map(m => m.usuario_id)).size;
+    const retPct = mauPrev === 0 ? 0 : Math.min(100, Math.round((mauCur / mauPrev) * 100));
+
+    // Métricas de funciones
+    const totalMov = (movimientos.data || []).length;
+    const totalPres = (presupuestos.data || []).length;
+    const totalMetas = (metas.data || []).length;
+    const totalGrupos = (grupos.data || []).length;
+
+    const funciones = [
+      { funcionalidad: 'Registro de Movimientos', uso_total: totalMov, motivo: 'Necesidad diaria de control de ingresos y gastos' },
+      { funcionalidad: 'Presupuestos por Categoría', uso_total: totalPres, motivo: 'Permite planificar el gasto mensual de forma estructurada' },
+      { funcionalidad: 'Metas de Ahorro', uso_total: totalMetas, motivo: 'Objetivos concretos de ahorro a futuro' },
+      { funcionalidad: 'Grupos de Gastos', uso_total: totalGrupos, motivo: 'Gasto colaborativo entre estudiantes' },
+    ].sort((a, b) => b.uso_total - a.uso_total).map((f, i) => ({
+      ...f,
+      ranking: i + 1,
+      estado: i === 0 ? 'Más utilizada' : i === 3 ? 'Menos utilizada' : 'Intermedia',
+    }));
+
+    // Gasto estimado vs real por usuario
+    const gastoComparativo = (usuarios.data || []).map(u => {
+      const est = Number(u.gasto_estimado) || 0;
+      const real = parseFloat((gastoPorUsuario[u.id] || 0).toFixed(2));
+      const dif = parseFloat((real - est).toFixed(2));
+      const difPct = est > 0 ? parseFloat(((dif / est) * 100).toFixed(1)) : null;
+      return {
+        usuario_id: u.id,
+        nombre: u.nombre,
+        gasto_estimado: est,
+        gasto_real: real,
+        diferencia_usd: dif,
+        diferencia_pct: difPct,
+        estado: dif > est * 0.1 ? 'Sobreestimado' : dif < -est * 0.1 ? 'Subestimado' : 'Alineado',
+      };
+    });
+
+    // Usuarios en riesgo financiero detallado
+    const usuariosRiesgo = (usuarios.data || []).map(u => {
+      const a = lastAnalisis[u.id];
+      return {
+        usuario_id: u.id,
+        nombre: u.nombre,
+        correo: u.correo,
+        wally_score: a?.puntaje_financiero ?? null,
+        nivel_riesgo: a?.nivel_riesgo ?? 'SIN_ANALISIS',
+        en_riesgo: a?.nivel_riesgo === 'RIESGO_FINANCIERO',
+        gasto_real: parseFloat((gastoPorUsuario[u.id] || 0).toFixed(2)),
+        gasto_estimado: Number(u.gasto_estimado) || 0,
+      };
+    });
+
+    // Categorías por gasto
+    const categoriasGasto = Object.entries(gastoPorCategoria)
+      .map(([nombre, total]) => ({
+        categoria: nombre,
+        gasto_total: parseFloat(total.toFixed(2)),
+        porcentaje_del_total: parseFloat(((total / Object.values(gastoPorCategoria).reduce((a, b) => a + b, 0)) * 100).toFixed(1)),
+      }))
+      .sort((a, b) => b.gasto_total - a.gasto_total);
+
+    // Efectividad de metas
+    const metasDetalle = (metas.data || []).map(m => {
+      const pct = Number(m.monto_objetivo) > 0
+        ? parseFloat(((Number(m.monto_actual) / Number(m.monto_objetivo)) * 100).toFixed(1))
+        : 0;
+      return {
+        usuario_id: m.usuario_id,
+        nombre_usuario: (m.usuarios as any)?.nombre || '',
+        meta: m.nombre,
+        monto_objetivo: Number(m.monto_objetivo),
+        monto_actual: Number(m.monto_actual),
+        progreso_pct: pct,
+        completada: Number(m.monto_actual) >= Number(m.monto_objetivo),
+        fecha_objetivo: m.fecha_objetivo,
+        fecha_creacion: m.fecha_creacion,
+      };
+    });
+
+    const metasCompletadas = metasDetalle.filter(m => m.completada).length;
+    const efectividadPct = metasDetalle.length > 0
+      ? parseFloat(((metasCompletadas / metasDetalle.length) * 100).toFixed(1))
+      : 0;
+
+    // Scores por usuario
+    const scoresDetalle = (usuarios.data || []).map(u => {
+      const a = lastAnalisis[u.id];
+      return {
+        usuario_id: u.id,
+        nombre: u.nombre,
+        wally_score: a?.puntaje_financiero ?? null,
+        nivel_riesgo: a?.nivel_riesgo ?? 'SIN_ANALISIS',
+        fecha_ultimo_analisis: a?.fecha_creacion ?? null,
+      };
+    });
+
+    const totalScore = scoresDetalle.reduce((acc, s) => acc + (s.wally_score || 0), 0);
+    const scoresConDatos = scoresDetalle.filter(s => s.wally_score !== null).length;
+    const scorePromedio = scoresConDatos > 0 ? Math.round(totalScore / scoresConDatos) : 0;
 
     return {
-      // Dimensiones base
-      dim_usuarios: usuarios.data,
+      // ── Dimensiones ───────────────────────────────────────────────────────
+      dim_usuarios: (usuarios.data || []).map(u => ({
+        id: u.id, nombre: u.nombre, correo: u.correo,
+        trabaja: u.trabaja, ingreso_mensual: u.ingreso_mensual,
+        gasto_estimado: u.gasto_estimado, fecha_registro: u.fecha_registro,
+      })),
+
+      // ── Tablas de hechos ──────────────────────────────────────────────────
       fact_movimientos: (movimientos.data || []).map(m => ({
-        id: m.id, usuario_id: m.usuario_id, nombre_usuario: (m.usuarios as any)?.nombre || '',
-        monto: Number(m.monto), tipo: m.tipo, fecha: m.fecha,
+        id: m.id, usuario_id: m.usuario_id,
+        nombre_usuario: (m.usuarios as any)?.nombre || '',
+        monto: Number(m.monto), tipo: m.tipo,
+        fecha: m.fecha, fecha_creacion: m.fecha_creacion,
         categoria: (m.categorias as any)?.nombre || 'Sin Categoría',
       })),
-      dim_presupuestos: (presupuestos.data || []).map(p => ({
-        id: p.id, usuario_id: p.usuario_id, limite_monto: p.limite_monto,
-        categoria: (p.categorias as any)?.nombre || 'Sin Categoria',
+      fact_presupuestos: (presupuestos.data || []).map(p => ({
+        id: p.id, usuario_id: p.usuario_id,
+        nombre_usuario: (p.usuarios as any)?.nombre || '',
+        limite_monto: Number(p.limite_monto),
+        categoria: (p.categorias as any)?.nombre || 'Sin Categoría',
       })),
-      fact_metas: metas.data || [],
-      fact_scores: (analisis.data || []).map(a => ({
-        usuario_id: a.usuario_id, puntaje_financiero: a.puntaje_financiero,
-        nivel_riesgo: a.nivel_riesgo, fecha: a.fecha_creacion,
+      fact_metas: metasDetalle,
+      fact_analisis_historico: (analisis.data || []).map(a => ({
+        usuario_id: a.usuario_id,
+        nombre_usuario: (a.usuarios as any)?.nombre || '',
+        puntaje_financiero: a.puntaje_financiero,
+        nivel_riesgo: a.nivel_riesgo,
+        fecha: a.fecha_creacion,
       })),
-      // KPIs listos para tarjetas de Power BI
-      kpis_negocio: {
-        usuarios_registrados: biz.usuarios_registrados,
-        usuarios_activos_mensuales: biz.usuarios_activos_mensuales,
-        tasa_retencion_pct: biz.tasa_retencion,
-        tasa_abandono_pct: biz.tasa_abandono,
-        uso_funcionalidades: biz.funcionalidades,
+
+      // ── Métricas calculadas ───────────────────────────────────────────────
+      funciones_uso: funciones,
+
+      gasto_estimado_vs_real: {
+        detalle_por_usuario: gastoComparativo,
+        resumen: {
+          usuarios_gastando_mas: gastoComparativo.filter(u => u.diferencia_usd > 0).length,
+          usuarios_gastando_menos: gastoComparativo.filter(u => u.diferencia_usd < 0).length,
+          usuarios_alineados: gastoComparativo.filter(u => u.estado === 'Alineado').length,
+          diferencia_promedio_pct: gastoComparativo.filter(u => u.diferencia_pct !== null).length > 0
+            ? parseFloat((gastoComparativo.filter(u => u.diferencia_pct !== null)
+                .reduce((acc, u) => acc + (u.diferencia_pct || 0), 0) /
+                gastoComparativo.filter(u => u.diferencia_pct !== null).length).toFixed(1))
+            : 0,
+        },
       },
-      kpis_financieros: {
-        gasto_promedio_usd: fin.gasto_promedio,
-        ingreso_promedio_usd: fin.ingreso_promedio,
-        usuarios_en_riesgo: fin.usuarios_en_riesgo,
-        diferencia_estimado_real_pct: fin.diferencia_estimado_real_pct,
-        metas_completadas: fin.metas_completadas,
-        total_metas: fin.total_metas,
-        wally_score_promedio: fin.wally_score_promedio,
-        top_categorias_gasto: fin.top_categorias,
+
+      usuarios_riesgo_financiero: {
+        detalle: usuariosRiesgo,
+        resumen: {
+          total_en_riesgo: usuariosRiesgo.filter(u => u.en_riesgo).length,
+          total_estudiantes: usuarios.data?.length || 0,
+          porcentaje_en_riesgo: usuarios.data && usuarios.data.length > 0
+            ? parseFloat(((usuariosRiesgo.filter(u => u.en_riesgo).length / usuarios.data.length) * 100).toFixed(1))
+            : 0,
+        },
       },
-      // Insights estratégicos con fundamento
-      insights_estrategicos: insights.map(ins => ({
-        titulo: ins.titulo,
-        dato_clave: ins.dato_texto,
-        accion_recomendada: ins.decision,
-      })),
+
+      categorias_mayor_gasto: {
+        ranking: categoriasGasto,
+        categoria_lider: categoriasGasto[0] ?? null,
+        categoria_menor_gasto: categoriasGasto[categoriasGasto.length - 1] ?? null,
+      },
+
+      efectividad_metas: {
+        detalle: metasDetalle,
+        resumen: {
+          total_metas: metasDetalle.length,
+          metas_completadas: metasCompletadas,
+          efectividad_pct: efectividadPct,
+          promedio_progreso_pct: metasDetalle.length > 0
+            ? parseFloat((metasDetalle.reduce((acc, m) => acc + m.progreso_pct, 0) / metasDetalle.length).toFixed(1))
+            : 0,
+        },
+      },
+
+      puntaje_financiero: {
+        detalle: scoresDetalle,
+        resumen: {
+          score_promedio: scorePromedio,
+          usuarios_excelente: scoresDetalle.filter(s => (s.wally_score || 0) >= 90).length,
+          usuarios_estable: scoresDetalle.filter(s => (s.wally_score || 0) >= 50 && (s.wally_score || 0) < 90).length,
+          usuarios_en_riesgo: scoresDetalle.filter(s => s.wally_score !== null && (s.wally_score || 0) < 50).length,
+          usuarios_sin_datos: scoresDetalle.filter(s => s.wally_score === null).length,
+        },
+      },
+
+      tasa_retencion: {
+        mau_periodo_actual: mauCur,
+        mau_periodo_anterior: mauPrev,
+        tasa_retencion_pct: retPct,
+        tasa_abandono_pct: Math.max(0, 100 - retPct),
+        interpretacion: retPct >= 60
+          ? 'Retención saludable. Los usuarios vuelven consistentemente a la plataforma.'
+          : 'Retención baja. Se recomienda revisar el onboarding y flujos clave.',
+      },
+
       metadata: {
         generado_en: new Date().toISOString(),
-        total_estudiantes: (usuarios.data || []).length,
+        total_estudiantes: usuarios.data?.length || 0,
         total_movimientos: (movimientos.data || []).length,
+        total_metas: metasDetalle.length,
+        total_presupuestos: (presupuestos.data || []).length,
+        total_grupos: (grupos.data || []).length,
       },
     };
   }
