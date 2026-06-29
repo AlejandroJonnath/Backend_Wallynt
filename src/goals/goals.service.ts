@@ -105,10 +105,17 @@ export class GoalsService {
     const supabase = this.supabaseService.getClient();
 
     const { data: existing } = await supabase
-      .from('metas_ahorro').select('usuario_id').eq('id', id).single();
+      .from('metas_ahorro').select('usuario_id, nombre').eq('id', id).single();
 
     if (!existing) throw new NotFoundException('Meta no encontrada');
     if (existing.usuario_id !== userId) throw new ForbiddenException();
+
+    // Eliminar los movimientos de gasto generados por aportes a esta meta
+    await supabase
+      .from('movimientos')
+      .delete()
+      .eq('usuario_id', userId)
+      .eq('descripcion', `Aporte a meta: ${existing.nombre}`);
 
     const { error } = await supabase.from('metas_ahorro').delete().eq('id', id);
     if (error) throw new BadRequestException(error.message);
