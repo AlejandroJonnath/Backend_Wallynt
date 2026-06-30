@@ -1,5 +1,6 @@
 import { Injectable, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
+import { CreateAlertDto } from './dto/create-alert.dto';
 import * as xlsx from 'xlsx';
 
 @Injectable()
@@ -708,4 +709,6 @@ export class AdminService {
     if (error) throw new BadRequestException(error.message);
     return { message: 'Usuario eliminado' };
   }
+
+
 }

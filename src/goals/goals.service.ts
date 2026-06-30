@@ -1,11 +1,15 @@
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
+import { AnalysisService } from '../analysis/analysis.service';
 import { CreateGoalDto } from './dto/create-goal.dto';
 import { ContributeGoalDto } from './dto/contribute-goal.dto';
 
 @Injectable()
 export class GoalsService {
-  constructor(private readonly supabaseService: SupabaseService) {}
+  constructor(
+    private readonly supabaseService: SupabaseService,
+    private readonly analysisService: AnalysisService
+  ) {}
 
   async findAll(userId: string) {
     const supabase = this.supabaseService.getClient();
@@ -64,6 +68,14 @@ export class GoalsService {
 
     if (findError || !goal) throw new NotFoundException('Meta no encontrada');
     if (goal.usuario_id !== userId) throw new ForbiddenException();
+
+    const { balance } = await this.analysisService.calcularSaldoHistorico(userId);
+    const saldoActual = Number(balance || 0);
+    const limiteAporte = saldoActual * 0.15;
+
+    if (Number(dto.aporte) > limiteAporte) {
+      throw new BadRequestException(`No puedes aportar más del 15% de tu saldo actual disponible (Límite: $${limiteAporte.toFixed(2)})`);
+    }
 
     const nuevoMonto = Number(goal.monto_actual) + Number(dto.aporte);
     if (nuevoMonto > Number(goal.monto_objetivo)) {

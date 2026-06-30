@@ -57,6 +57,15 @@ export class GroupsService {
     // El creador entra como ACTIVO directamente
     await supabase.from('participantes_grupo').insert([{ grupo_id: grupo.id, usuario_id: userId, estado: 'ACTIVO' }]);
 
+    if (dto.correo_invitado && dto.correo_invitado.trim() !== '') {
+      try {
+        await this.addMember(userId, grupo.id, { correo: dto.correo_invitado });
+      } catch (e) {
+        console.log('Error inviting user on group creation:', e.message);
+        // We do not throw error here, so the group is still created
+      }
+    }
+
     return grupo;
   }
 
@@ -64,7 +73,7 @@ export class GroupsService {
     const supabase = this.supabaseService.getClient();
 
     const { data: grupo } = await supabase
-      .from('grupos_gastos').select('creador_id').eq('id', groupId).single();
+      .from('grupos_gastos').select('creador_id, nombre').eq('id', groupId).single();
 
     if (!grupo) throw new NotFoundException('Grupo no encontrado');
     if (grupo.creador_id !== creatorId) throw new ForbiddenException('Solo el creador puede invitar miembros');
@@ -82,6 +91,16 @@ export class GroupsService {
       .single();
 
     if (error) throw new BadRequestException(error.message);
+
+    // Crear alerta
+    await supabase.from('alertas').insert([{
+      usuario_id: usuario.id,
+      titulo: 'Nueva invitación a grupo',
+      mensaje: `Te han invitado a unirte al grupo "${grupo.nombre}". Ve a Grupos para aceptar.`,
+      tipo: 'INFO',
+      leida: false
+    }]);
+
     return { ...data, usuario };
   }
 
@@ -170,6 +189,10 @@ export class GroupsService {
 
     if (error) throw new BadRequestException(error.message);
 
+    if (dto.estado === 'PENDIENTE') {
+      return gasto; // Se guarda como borrador, sin restar ni dividir
+    }
+
     // Dividir monto
     const division = Number((dto.monto / miembros.length).toFixed(2));
     
@@ -184,6 +207,39 @@ export class GroupsService {
     await supabase.from('grupo_aprobaciones_gasto').insert(aprobaciones);
 
     return gasto;
+  }
+
+  async confirmExpense(userId: string, groupId: string, expenseId: string) {
+    const supabase = this.supabaseService.getClient();
+
+    const { data: gasto } = await supabase.from('gastos_compartidos').select('*').eq('id', expenseId).single();
+    if (!gasto) throw new NotFoundException('Gasto no encontrado');
+    if (gasto.usuario_id !== userId) throw new ForbiddenException('Solo el creador puede confirmar el gasto');
+
+    const { data: aprobacionesExistentes } = await supabase.from('grupo_aprobaciones_gasto').select('id').eq('gasto_id', expenseId);
+    if (aprobacionesExistentes && aprobacionesExistentes.length > 0) {
+      throw new BadRequestException('El gasto ya fue confirmado');
+    }
+
+    const { data: miembros } = await supabase
+      .from('participantes_grupo')
+      .select('usuario_id')
+      .eq('grupo_id', groupId)
+      .eq('estado', 'ACTIVO');
+
+    if (!miembros || miembros.length === 0) throw new BadRequestException('No hay miembros activos para dividir el gasto');
+
+    const division = Number((gasto.monto / miembros.length).toFixed(2));
+    
+    const aprobaciones = miembros.map(m => ({
+      gasto_id: gasto.id,
+      usuario_id: m.usuario_id,
+      monto_dividido: division,
+      estado: m.usuario_id === userId ? 'APROBADO' : 'PENDIENTE'
+    }));
+
+    await supabase.from('grupo_aprobaciones_gasto').insert(aprobaciones);
+    return { message: 'Gasto confirmado y dividido' };
   }
 
   async respondExpense(userId: string, approvalId: string, accept: boolean) {
