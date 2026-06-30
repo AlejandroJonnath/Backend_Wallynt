@@ -59,4 +59,9 @@ export class GroupsController {
   removeExpense(@Request() req, @Param('id') id: string, @Param('expenseId') expenseId: string) {
     return this.groupsService.removeExpense(req.user.userId, id, expenseId);
   }
+
+  @Post(':id/expenses/:expenseId/confirm')
+  confirmExpense(@Request() req, @Param('id') id: string, @Param('expenseId') expenseId: string) {
+    return this.groupsService.confirmExpense(req.user.userId, id, expenseId);
+  }
 }

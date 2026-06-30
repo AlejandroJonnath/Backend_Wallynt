@@ -5,6 +5,39 @@ import { SupabaseService } from '../supabase/supabase.service';
 export class AnalysisService {
   constructor(private readonly supabaseService: SupabaseService) {}
 
+  private async calcularSaldoHistorico(userId: string): Promise<number> {
+    const supabase = this.supabaseService.getClient();
+    const hoy = new Date();
+    const { data: usuario } = await supabase
+      .from('usuarios')
+      .select('ingreso_mensual, fecha_registro')
+      .eq('id', userId)
+      .single();
+
+    const ingreso_fijo = Number(usuario?.ingreso_mensual || 0);
+    
+    let mesesActivos = 1;
+    if (usuario?.fecha_registro) {
+      const fechaReg = new Date(usuario.fecha_registro);
+      mesesActivos = (hoy.getFullYear() - fechaReg.getFullYear()) * 12 + (hoy.getMonth() - fechaReg.getMonth()) + 1;
+      if (mesesActivos < 1) mesesActivos = 1;
+    }
+
+    const { data: movimientos } = await supabase
+      .from('movimientos')
+      .select('monto, tipo')
+      .eq('usuario_id', userId);
+
+    let totalIngresosHist = 0;
+    let totalGastosHist = 0;
+    (movimientos || []).forEach(m => {
+      if (m.tipo === 'INGRESO') totalIngresosHist += Number(m.monto);
+      else totalGastosHist += Number(m.monto);
+    });
+
+    return (ingreso_fijo * mesesActivos) + totalIngresosHist - totalGastosHist;
+  }
+
   async getDashboard(userId: string) {
     const supabase = this.supabaseService.getClient();
     const startOfMonth = new Date();
@@ -21,19 +54,20 @@ export class AnalysisService {
     let totalPresupuestos = 0;
     (presRes.data || []).forEach(p => totalPresupuestos += Number(p.limite_monto));
 
-    let totalIngresos = 0;
-    let totalGastos = 0;
+    let totalIngresosMes = 0;
+    let totalGastosMes = 0;
     (movRes.data || []).forEach(m => {
-      if (m.tipo === 'INGRESO') totalIngresos += Number(m.monto);
-      else totalGastos += Number(m.monto);
+      if (m.tipo === 'INGRESO') totalIngresosMes += Number(m.monto);
+      else totalGastosMes += Number(m.monto);
     });
 
     const dinero_ahorro = Math.max(0, ingreso_fijo - totalPresupuestos);
+    const saldoHistorico = await this.calcularSaldoHistorico(userId);
 
     return { 
-      totalIngresos: totalIngresos + Number(ingreso_fijo), 
-      totalGastos, 
-      saldoDisponible: (Number(ingreso_fijo) + totalIngresos) - totalGastos,
+      totalIngresos: totalIngresosMes + Number(ingreso_fijo), 
+      totalGastos: totalGastosMes, 
+      saldoDisponible: saldoHistorico,
       ingreso_mensual_fijo: Number(ingreso_fijo),
       dinero_para_ahorro: Number(dinero_ahorro)
     };
@@ -43,22 +77,7 @@ export class AnalysisService {
     const supabase = this.supabaseService.getClient();
     const hoy = new Date();
     const startOfMonth = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
-    const startDate = startOfMonth.toISOString().split('T')[0];
-
-    const { data: movimientos } = await supabase
-      .from('movimientos')
-      .select('monto, tipo')
-      .eq('usuario_id', userId)
-      .gte('fecha', startDate);
-
-    let totalIngresos = 0;
-    let totalGastos = 0;
-    (movimientos || []).forEach(m => {
-      if (m.tipo === 'INGRESO') totalIngresos += Number(m.monto);
-      else totalGastos += Number(m.monto);
-    });
-
-    const saldo = totalIngresos - totalGastos;
+    const saldo = await this.calcularSaldoHistorico(userId);
     const diasEnMes = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0).getDate();
     const diasRestantes = Math.max(diasEnMes - hoy.getDate() + 1, 1);
     const limiteDiario = Math.max(saldo / diasRestantes, 0);
@@ -73,33 +92,7 @@ export class AnalysisService {
   async getFinancialPrediction(userId: string) {
     const supabase = this.supabaseService.getClient();
 
-    // Saldo real: igual al dashboard (ingreso fijo + ingresos manuales - gastos del mes)
-    const { data: usuario } = await supabase
-      .from('usuarios')
-      .select('ingreso_mensual')
-      .eq('id', userId)
-      .single();
-
-    const ingreso_fijo = Number(usuario?.ingreso_mensual || 0);
-
-    const hoy = new Date();
-    const startOfMonth = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
-    const startDate = startOfMonth.toISOString().split('T')[0];
-
-    const { data: movimientosMes } = await supabase
-      .from('movimientos')
-      .select('monto, tipo')
-      .eq('usuario_id', userId)
-      .gte('fecha', startDate);
-
-    let totalIngresosMes = 0;
-    let totalGastosMes = 0;
-    (movimientosMes || []).forEach(m => {
-      if (m.tipo === 'INGRESO') totalIngresosMes += Number(m.monto);
-      else totalGastosMes += Number(m.monto);
-    });
-
-    const saldoDisponible = ingreso_fijo + totalIngresosMes - totalGastosMes;
+    const saldoDisponible = await this.calcularSaldoHistorico(userId);
 
     // Promedio diario basado en últimos 30 días
     const hace30Dias = new Date();

@@ -1,11 +1,14 @@
-import { Controller, Get, Patch, Delete, Body, Param, UseGuards, Request } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards, Request } from '@nestjs/common';
 import { AdminService } from './admin.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+
 
 @Controller('admin')
 @UseGuards(JwtAuthGuard)
 export class AdminController {
   constructor(private readonly adminService: AdminService) {}
+
+
 
   @Get('business-kpis')
   getBusinessKPIs(@Request() req) {

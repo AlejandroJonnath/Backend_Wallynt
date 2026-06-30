@@ -8,4 +8,7 @@ export class AddExpenseDto {
   @IsNumber()
   @Min(0.01)
   monto: number;
+
+  @IsString()
+  estado?: 'PENDIENTE' | 'ACEPTADO';
 }
