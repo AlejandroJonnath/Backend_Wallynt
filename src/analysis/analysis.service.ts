@@ -5,7 +5,7 @@ import { SupabaseService } from '../supabase/supabase.service';
 export class AnalysisService {
   constructor(private readonly supabaseService: SupabaseService) {}
 
-  private async calcularSaldoHistorico(userId: string): Promise<number> {
+  async calcularSaldoHistorico(userId: string): Promise<number> {
     const supabase = this.supabaseService.getClient();
     const hoy = new Date();
     const { data: usuario } = await supabase
@@ -113,8 +113,9 @@ export class AnalysisService {
       ? Math.max(0, Math.floor(saldoDisponible / promedioGastoDiario))
       : 999;
 
-    const fechaEstimada = new Date();
-    fechaEstimada.setDate(fechaEstimada.getDate() + diasHastaSinDinero);
+    const hoy = new Date();
+    const fechaEstimada = new Date(hoy);
+    fechaEstimada.setDate(hoy.getDate() + diasHastaSinDinero);
 
     const diasHastaFinMes = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0).getDate() - hoy.getDate();
 

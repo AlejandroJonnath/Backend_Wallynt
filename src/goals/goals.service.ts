@@ -69,7 +69,7 @@ export class GoalsService {
     if (findError || !goal) throw new NotFoundException('Meta no encontrada');
     if (goal.usuario_id !== userId) throw new ForbiddenException();
 
-    const { balance } = await this.analysisService.calcularSaldoHistorico(userId);
+    const balance = await this.analysisService.calcularSaldoHistorico(userId);
     const saldoActual = Number(balance || 0);
     const limiteAporte = saldoActual * 0.15;
 
