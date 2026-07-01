@@ -1,6 +1,6 @@
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
-import { AnalysisService } from '../analysis/analysis.service';
+import { AnalysisDashboardService } from '../analysis/services/analysis-dashboard.service';
 import { CreateGoalDto } from './dto/create-goal.dto';
 import { ContributeGoalDto } from './dto/contribute-goal.dto';
 
@@ -8,7 +8,7 @@ import { ContributeGoalDto } from './dto/contribute-goal.dto';
 export class GoalsService {
   constructor(
     private readonly supabaseService: SupabaseService,
-    private readonly analysisService: AnalysisService
+    private readonly analysisDashboardService: AnalysisDashboardService
   ) {}
 
   async findAll(userId: string) {
@@ -69,7 +69,7 @@ export class GoalsService {
     if (findError || !goal) throw new NotFoundException('Meta no encontrada');
     if (goal.usuario_id !== userId) throw new ForbiddenException();
 
-    const balance = await this.analysisService.calcularSaldoHistorico(userId);
+    const balance = await this.analysisDashboardService.calcularSaldoHistorico(userId);
     const saldoActual = Number(balance || 0);
     const limiteAporte = saldoActual * 0.15;
 

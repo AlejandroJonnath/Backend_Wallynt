@@ -1,39 +1,46 @@
 import { Controller, Get, Patch, Param, UseGuards, Request } from '@nestjs/common';
-import { AnalysisService } from './analysis.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+
+import { AnalysisDashboardService } from './services/analysis-dashboard.service';
+import { AnalysisPredictionsService } from './services/analysis-predictions.service';
+import { AnalysisAlertsService } from './services/analysis-alerts.service';
 
 @Controller('analysis')
 @UseGuards(JwtAuthGuard)
 export class AnalysisController {
-  constructor(private readonly analysisService: AnalysisService) {}
+  constructor(
+    private readonly analysisDashboardService: AnalysisDashboardService,
+    private readonly analysisPredictionsService: AnalysisPredictionsService,
+    private readonly analysisAlertsService: AnalysisAlertsService,
+  ) {}
 
   @Get('dashboard')
   getDashboard(@Request() req) {
-    return this.analysisService.getDashboard(req.user.userId);
+    return this.analysisDashboardService.getDashboard(req.user.userId);
   }
 
   @Get('score')
   getScore(@Request() req) {
-    return this.analysisService.calculateAndSaveWallyScore(req.user.userId);
+    return this.analysisPredictionsService.calculateAndSaveWallyScore(req.user.userId);
   }
 
   @Get('daily-limit')
   getDailyLimit(@Request() req) {
-    return this.analysisService.getDailyLimit(req.user.userId);
+    return this.analysisDashboardService.getDailyLimit(req.user.userId);
   }
 
   @Get('prediction')
   getPrediction(@Request() req) {
-    return this.analysisService.getFinancialPrediction(req.user.userId);
+    return this.analysisPredictionsService.getFinancialPrediction(req.user.userId);
   }
 
   @Get('alerts')
   getAlerts(@Request() req) {
-    return this.analysisService.getAlerts(req.user.userId);
+    return this.analysisAlertsService.getAlerts(req.user.userId);
   }
 
   @Patch('alerts/:id/read')
   markRead(@Request() req, @Param('id') id: string) {
-    return this.analysisService.markAlertRead(req.user.userId, id);
+    return this.analysisAlertsService.markAlertRead(req.user.userId, id);
   }
 }

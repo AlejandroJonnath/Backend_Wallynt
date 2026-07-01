@@ -1,6 +1,6 @@
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
-import { AnalysisService } from '../analysis/analysis.service';
+import { AnalysisAlertsService } from '../analysis/services/analysis-alerts.service';
 import { CreateMovementDto } from './dto/create-movement.dto';
 import { UpdateMovementDto } from './dto/update-movement.dto';
 
@@ -8,7 +8,7 @@ import { UpdateMovementDto } from './dto/update-movement.dto';
 export class MovementsService {
   constructor(
     private readonly supabaseService: SupabaseService,
-    private readonly analysisService: AnalysisService,
+    private readonly analysisAlertsService: AnalysisAlertsService,
   ) {}
 
   async create(userId: string, dto: CreateMovementDto) {
@@ -31,7 +31,7 @@ export class MovementsService {
     if (error) throw new BadRequestException(error.message);
 
     // Generar alertas en background, sin bloquear la respuesta
-    this.analysisService.generateAlerts(userId).catch(() => {});
+    this.analysisAlertsService.generateAlerts(userId).catch(() => {});
 
     return data;
   }
