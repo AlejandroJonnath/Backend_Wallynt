@@ -54,7 +54,7 @@ export class AdminKpisService {
       supabase.from('movimientos').select('monto, tipo, usuario_id, categorias(nombre)'),
       supabase.from('usuarios').select('id, gasto_estimado').eq('rol', 'ESTUDIANTE'),
       supabase.from('analisis_financiero').select('usuario_id, nivel_riesgo, puntaje_financiero').order('fecha_creacion', { ascending: false }),
-      supabase.from('metas_ahorro').select('estado'),
+      supabase.from('metas_ahorro').select('monto_actual, monto_objetivo'),
       supabase.from('alertas').select('id', { count: 'exact', head: true }),
     ]);
 
@@ -104,7 +104,7 @@ export class AdminKpisService {
       }
     }
 
-    const metasCompletadas = (metas.data || []).filter(m => m.estado === 'COMPLETADA').length;
+    const metasCompletadas = (metas.data || []).filter(m => Number(m.monto_actual) >= Number(m.monto_objetivo)).length;
     const totalMetas = (metas.data || []).length;
 
     return {
