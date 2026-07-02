@@ -59,4 +59,9 @@ export class AdminController {
   deleteUser(@Request() req, @Param('id') id: string) {
     return this.adminUsersService.deleteUser(req.user.userId, id);
   }
+
+  @Post('users/generate')
+  generateUsers(@Request() req, @Body() body: { count: number }) {
+    return this.adminUsersService.generateUsers(req.user.userId, body.count);
+  }
 }
