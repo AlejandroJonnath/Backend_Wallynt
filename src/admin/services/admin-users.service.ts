@@ -91,6 +91,55 @@ export class AdminUsersService {
             periodo: 'MENSUAL'
           }));
           await supabase.from('presupuestos').insert(presupuestosIniciales);
+
+          const metas = [
+            {
+              usuario_id: userId,
+              nombre: 'Nuevo teléfono',
+              monto_objetivo: 200,
+              monto_actual: 200, // completada
+              fecha_objetivo: new Date(new Date().setMonth(new Date().getMonth() + 2)).toISOString().split('T')[0]
+            },
+            {
+              usuario_id: userId,
+              nombre: 'Viaje fin de semestre',
+              monto_objetivo: 150,
+              monto_actual: Math.floor(Math.random() * 100), // incompleta
+              fecha_objetivo: new Date(new Date().setMonth(new Date().getMonth() + 5)).toISOString().split('T')[0]
+            }
+          ];
+          await supabase.from('metas_ahorro').insert(metas);
+
+          const catComida = categorias[0].id;
+          const catTrans = categorias.length > 1 ? categorias[1].id : categorias[0].id;
+
+          const movimientos = [
+            {
+              usuario_id: userId,
+              categoria_id: catComida,
+              tipo: 'GASTO',
+              monto: Math.floor(gasto_estimado * 0.4),
+              descripcion: 'Almuerzos universidad',
+              fecha: new Date().toISOString().split('T')[0],
+            },
+            {
+              usuario_id: userId,
+              categoria_id: catTrans,
+              tipo: 'GASTO',
+              monto: Math.floor(gasto_estimado * 0.2),
+              descripcion: 'Transporte público',
+              fecha: new Date().toISOString().split('T')[0],
+            },
+            {
+              usuario_id: userId,
+              categoria_id: catComida, 
+              tipo: 'INGRESO',
+              monto: ingreso_mensual,
+              descripcion: 'Mesada/Ingresos del mes',
+              fecha: new Date(new Date().setDate(1)).toISOString().split('T')[0],
+            }
+          ];
+          await supabase.from('movimientos').insert(movimientos);
         }
         return userId;
       });

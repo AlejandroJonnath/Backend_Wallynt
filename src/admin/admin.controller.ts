@@ -35,7 +35,10 @@ export class AdminController {
   @Get('export/excel')
   async exportExcel(@Request() req) {
     const base64 = await this.adminExportService.exportExcel(req.user.userId);
-    return { base64, filename: 'wallynt_report.xlsx' };
+    const date = new Date();
+    const meses = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+    const filename = `Reporte_${date.getDate()}_${meses[date.getMonth()]}_${date.getFullYear()}.xlsx`;
+    return { base64, filename };
   }
 
   // JSON estructurado para Power BI
