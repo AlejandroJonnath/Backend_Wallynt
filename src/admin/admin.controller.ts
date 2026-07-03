@@ -67,4 +67,9 @@ export class AdminController {
   generateUsers(@Request() req, @Body() body: { count: number }) {
     return this.adminUsersService.generateUsers(req.user.userId, body.count);
   }
+
+  @Delete('users/generated/clean')
+  deleteGeneratedUsers(@Request() req) {
+    return this.adminUsersService.deleteGeneratedUsers(req.user.userId);
+  }
 }

@@ -127,7 +127,7 @@ export class AdminUsersService {
               categoria_id: catTrans,
               tipo: 'GASTO',
               monto: Math.floor(gasto_estimado * 0.2),
-              descripcion: 'Transporte público',
+              descripcion: 'Transporte pǧblico',
               fecha: new Date().toISOString().split('T')[0],
             },
             {
@@ -140,6 +140,19 @@ export class AdminUsersService {
             }
           ];
           await supabase.from('movimientos').insert(movimientos);
+
+          // Generar analisis_financiero para que no salgan "Sin datos"
+          const puntaje = Math.floor(Math.random() * (95 - 40 + 1)) + 40;
+          let nivel = 'EXCELENTE';
+          if (puntaje < 50) nivel = 'RIESGO_FINANCIERO';
+          else if (puntaje < 70) nivel = 'ESTABLE';
+          else if (puntaje < 90) nivel = 'BUENO';
+
+          await supabase.from('analisis_financiero').insert([{
+            usuario_id: userId,
+            puntaje_financiero: puntaje,
+            nivel_riesgo: nivel
+          }]);
         }
         return userId;
       });
@@ -155,5 +168,33 @@ export class AdminUsersService {
     }
 
     return { message: `${createdCount} usuarios generados correctamente.` };
+  }
+
+  async deleteGeneratedUsers(adminId: string) {
+    const rol = await this.adminCoreService.verifyRole(adminId);
+    if (rol !== 'SUPERADMIN') throw new ForbiddenException('Solo SuperAdmin puede eliminar usuarios generados');
+
+    const supabase = this.supabaseService.getClient();
+    
+    // Buscar estudiantes generados usando el patrn de correo
+    const { data: usersToDelete, error: fetchError } = await supabase
+      .from('usuarios')
+      .select('id')
+      .like('correo', 'est_%@hotmail.com');
+
+    if (fetchError) throw new BadRequestException(fetchError.message);
+    
+    if (!usersToDelete || usersToDelete.length === 0) {
+      return { message: 'No se encontraron usuarios de prueba para eliminar.' };
+    }
+
+    let deletedCount = 0;
+    // Eliminar de Auth borrarǭ en cascada de la tabla usuarios pǧblica
+    for (const u of usersToDelete) {
+      const { error: delError } = await supabase.auth.admin.deleteUser(u.id);
+      if (!delError) deletedCount++;
+    }
+
+    return { message: `${deletedCount} usuarios de prueba eliminados correctamente.` };
   }
 }
