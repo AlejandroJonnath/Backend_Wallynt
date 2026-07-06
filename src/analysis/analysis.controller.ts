@@ -4,6 +4,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AnalysisDashboardService } from './services/analysis-dashboard.service';
 import { AnalysisPredictionsService } from './services/analysis-predictions.service';
 import { AnalysisAlertsService } from './services/analysis-alerts.service';
+import { AnalysisAiService } from './services/analysis-ai.service';
 
 @Controller('analysis')
 @UseGuards(JwtAuthGuard)
@@ -12,6 +13,7 @@ export class AnalysisController {
     private readonly analysisDashboardService: AnalysisDashboardService,
     private readonly analysisPredictionsService: AnalysisPredictionsService,
     private readonly analysisAlertsService: AnalysisAlertsService,
+    private readonly analysisAiService: AnalysisAiService,
   ) {}
 
   @Get('dashboard')
@@ -42,5 +44,10 @@ export class AnalysisController {
   @Patch('alerts/:id/read')
   markRead(@Request() req, @Param('id') id: string) {
     return this.analysisAlertsService.markAlertRead(req.user.userId, id);
+  }
+
+  @Get('ai-recommendations')
+  getAiRecommendations(@Request() req) {
+    return this.analysisAiService.getPersonalizedRecommendations(req.user.userId);
   }
 }
