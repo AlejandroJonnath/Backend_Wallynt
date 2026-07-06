@@ -14,7 +14,7 @@ export class AnalysisController {
     private readonly analysisPredictionsService: AnalysisPredictionsService,
     private readonly analysisAlertsService: AnalysisAlertsService,
     private readonly analysisAiService: AnalysisAiService,
-  ) {}
+  ) { }
 
   @Get('dashboard')
   getDashboard(@Request() req) {

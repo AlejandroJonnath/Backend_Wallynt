@@ -24,4 +24,4 @@ import { AnalysisAiService } from './services/analysis-ai.service';
     AnalysisAiService,
   ],
 })
-export class AnalysisModule {}
+export class AnalysisModule { }
