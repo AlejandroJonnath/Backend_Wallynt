@@ -144,7 +144,7 @@ INSTRUCCIONES CLAVES:
 
     try {
       const response = await this.groq.chat.completions.create({
-        model: 'llama3-groq-70b-8192-tool-use-preview',
+        model: 'llama-3.3-70b-versatile',
         messages: messages,
         tools: tools,
         tool_choice: 'auto',
@@ -173,7 +173,7 @@ INSTRUCCIONES CLAVES:
 
         // Segunda llamada a Groq con los resultados del mapa
         const secondResponse = await this.groq.chat.completions.create({
-          model: 'llama3-groq-70b-8192-tool-use-preview',
+          model: 'llama-3.3-70b-versatile',
           messages: messages,
         });
 
@@ -181,8 +181,8 @@ INSTRUCCIONES CLAVES:
       }
 
       return responseMessage.content || 'Hubo un error al procesar tu solicitud.';
-    } catch (error) {
-      console.error('Error en Groq API:', error);
+    } catch (error: any) {
+      console.error('Error en Groq API:', error.error ? JSON.stringify(error.error) : error);
       throw new BadRequestException('Error al comunicarse con la IA');
     }
   }
