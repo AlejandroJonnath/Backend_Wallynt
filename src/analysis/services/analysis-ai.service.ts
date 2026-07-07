@@ -46,7 +46,7 @@ export class AnalysisAiService {
     });
   }
 
-  // Método para el mensaje proactivo inicial
+  // Genera recomendaciones personalizadas con Groq basadas en el score y presupuesto
   async getPersonalizedRecommendations(userId: string): Promise<{
     greeting: string;
     tips: { icon: string; title: string; description: string }[];
@@ -60,68 +60,61 @@ export class AnalysisAiService {
     ]);
 
     const { puntaje_financiero, nivel_riesgo } = scoreData;
-    const problematicExpenses = await this.getRecentProblematicExpenses(userId);
 
-    let greeting = '';
-    let tips: { icon: string; title: string; description: string }[] = [];
+    try {
+      const prompt = `Eres WallyBot, un asistente financiero amigable para estudiantes universitarios en Quito, Ecuador.
+El estudiante tiene:
+- Saldo disponible este mes: $${dashboardData.saldoDisponible?.toFixed(2) ?? 0}
+- Wally Score financiero: ${puntaje_financiero}/100 (${nivel_riesgo})
+- Gasto total del mes: $${dashboardData.totalGastos?.toFixed(2) ?? 0}
 
-    if (problematicExpenses.length > 0) {
-      const exp = problematicExpenses[0];
-      const cat = (exp.categorias as any)?.nombre?.toLowerCase() || '';
+Genera una respuesta JSON con exactamente este formato (sin texto adicional, solo el JSON):
+{
+  "greeting": "Un saludo corto y amigable (máx 2 frases) mencionando su situación financiera actual. Usa emojis. Di 'Hey, no sabes gestionar bien tu dinero? déjame ayudarte' si el score es bajo.",
+  "tips": [
+    { "icon": "emoji", "title": "título corto", "description": "consejo práctico de 1-2 frases para estudiantes en Quito" },
+    { "icon": "emoji", "title": "título corto", "description": "consejo práctico de 1-2 frases para estudiantes en Quito" },
+    { "icon": "emoji", "title": "título corto", "description": "consejo práctico de 1-2 frases para estudiantes en Quito" }
+  ]
+}
 
-      if (cat.includes('educ')) {
-        greeting = `¡Hey! Noté que gastaste $${exp.monto} en ${exp.descripcion || 'educación'}. Aquí tienes consejos para reducir esos gastos 📚`;
-        tips = [
-          { icon: '📋', title: 'Compara precios de copias', description: 'Busca papelerías alternativas en tu barrio, los precios pueden variar hasta un 50%.' },
-          { icon: '📱', title: 'Usa apps de estudio gratis', description: 'Google Docs, Notion y Canva te ayudan a reducir impresiones innecesarias.' },
-          { icon: '🤝', title: 'Comparte materiales', description: 'Coordina con compañeros para dividir costos de fotocopias e impresiones.' },
-        ];
-      } else if (cat.includes('transporte')) {
-        greeting = `¡Hey! Vi un gasto de $${exp.monto} en transporte. Con tu saldo de $${dashboardData.saldoDisponible.toFixed(2)}, te recomiendo estas opciones 🚌`;
-        tips = [
-          { icon: '🚌', title: 'Usa el Trolebús y Ecovía', description: 'El transporte público en Quito cuesta $0.45 y es una alternativa económica.' },
-          { icon: '🚶', title: 'Camina distancias cortas', description: 'Si el destino está a menos de 20 min, caminar ahorra dinero y es saludable.' },
-          { icon: '👥', title: 'Comparte taxi con amigos', description: 'Dividir el costo de un taxi entre 3-4 personas puede ser más barato que viajar solo.' },
-        ];
-      } else if (cat.includes('comida') || cat.includes('alimenta')) {
-        greeting = `¡Hey! Gastaste $${exp.monto} en ${exp.descripcion || 'comida'}. Te dejo tips para ahorrar en alimentación 🍽️`;
-        tips = [
-          { icon: '🍱', title: 'Prepara tu almuerzo en casa', description: 'Cocinar en casa puede ahorrarte hasta $3 por comida al día.' },
-          { icon: '📍', title: 'Busca menús del día', description: 'Los restaurantes cercanos a universidades suelen tener menús económicos de $2-3.' },
-          { icon: '🛒', title: 'Compra en mercados locales', description: 'Los mercados municipales tienen frutas y verduras a menor precio que los supermercados.' },
-        ];
-      } else {
-        greeting = `¡Hey! Detecté gastos que podrían optimizarse. Aquí van mis recomendaciones 💡`;
-        tips = [
-          { icon: '📊', title: 'Registra todos tus gastos', description: 'Anotar cada gasto te permite identificar en qué estás gastando de más.' },
-          { icon: '💰', title: 'Establece un límite diario', description: 'Define cuánto puedes gastar por día para no exceder tu presupuesto mensual.' },
-          { icon: '🎯', title: 'Prioriza tus necesidades', description: 'Clasifica tus gastos en necesarios y prescindibles para tomar mejores decisiones.' },
-        ];
+Los tips deben ser prácticos para Quito (ej: Trolebús, mercados, comedores universitarios, etc). Responde SOLO el JSON.`;
+
+      const response = await this.groq.chat.completions.create({
+        model: 'llama-3.3-70b-versatile',
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: 600,
+        temperature: 0.7,
+      });
+
+      const rawText = response.choices[0]?.message?.content || '';
+      // Extraer JSON de la respuesta
+      const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        return {
+          greeting: parsed.greeting || '¡Hey! Aquí van mis consejos financieros 💡',
+          tips: parsed.tips || [],
+          score: puntaje_financiero,
+          nivel_riesgo,
+          hasContextMsg: puntaje_financiero < 70,
+        };
       }
-    } else {
-      if (puntaje_financiero < 50) {
-        greeting = '¡Hey! Tu situación financiera necesita atención urgente. ¡Vamos a mejorarla juntos! 🚨';
-        tips = [
-          { icon: '🛑', title: 'Reduce gastos inmediatamente', description: 'Identifica y elimina gastos no esenciales para estabilizar tu economía.' },
-          { icon: '💵', title: 'Busca ingresos adicionales', description: 'Considera trabajos part-time o venta de servicios para aumentar tus ingresos.' },
-          { icon: '📋', title: 'Crea un presupuesto estricto', description: 'Asigna montos fijos a cada categoría de gasto y respétalos.' },
-        ];
-      } else {
-        greeting = '¡Hey! Tienes margen para mejorar tu salud financiera. Aquí van mis consejos 😊';
-        tips = [
-          { icon: '💡', title: 'Ahorra el 10% de tus ingresos', description: 'Reserva automáticamente un porcentaje antes de gastar para crear un fondo de emergencia.' },
-          { icon: '📈', title: 'Revisa tus gastos semanalmente', description: 'Una revisión semanal te permite corregir el rumbo antes de fin de mes.' },
-          { icon: '🎓', title: 'Aprovecha descuentos estudiantiles', description: 'Presenta tu carnet en transporte, cines y restaurantes para obtener precios preferenciales.' },
-        ];
-      }
+    } catch (e) {
+      console.error('Error en Groq para recomendaciones:', e);
     }
 
+    // Fallback si Groq falla
     return {
-      greeting,
-      tips,
+      greeting: `¡Hey! Tu Wally Score es ${puntaje_financiero}/100. Aquí van mis consejos 💡`,
+      tips: [
+        { icon: '💰', title: 'Controla tu presupuesto', description: 'Registra cada gasto para saber en qué estás gastando de más.' },
+        { icon: '🚌', title: 'Usa transporte público', description: 'El Trolebús y la Ecovía en Quito cuestan $0.45, ahorra usando MetroBus.' },
+        { icon: '🍱', title: 'Come en comedores universitarios', description: 'Los almuerzos universitarios suelen costar entre $1.50 y $2.50.' },
+      ],
       score: puntaje_financiero,
       nivel_riesgo,
-      hasContextMsg: problematicExpenses.length > 0,
+      hasContextMsg: puntaje_financiero < 70,
     };
   }
 
