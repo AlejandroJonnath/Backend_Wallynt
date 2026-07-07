@@ -211,32 +211,140 @@ INSTRUCCIONES CLAVES:
     }
   }
 
-  // Llama a la API de Nominatim (OpenStreetMap)
+  // Mapeo de tipos de lugar en español a tags de OpenStreetMap
+  private getOsmTags(placeType: string): { key: string; value: string }[] {
+    const pt = placeType.toLowerCase();
+
+    if (pt.includes('restaurante') || pt.includes('comida') || pt.includes('almuerzo') || pt.includes('comer')) {
+      return [
+        { key: 'amenity', value: 'restaurant' },
+        { key: 'amenity', value: 'fast_food' },
+        { key: 'amenity', value: 'cafe' },
+      ];
+    }
+    if (pt.includes('papelería') || pt.includes('papeleria') || pt.includes('copia') || pt.includes('imprenta')) {
+      return [
+        { key: 'shop', value: 'stationery' },
+        { key: 'shop', value: 'copyshop' },
+        { key: 'amenity', value: 'copyshop' },
+      ];
+    }
+    if (pt.includes('bus') || pt.includes('parada') || pt.includes('trole') || pt.includes('ecov') || pt.includes('metro') || pt.includes('transporte')) {
+      return [
+        { key: 'highway', value: 'bus_stop' },
+        { key: 'amenity', value: 'bus_station' },
+        { key: 'railway', value: 'station' },
+        { key: 'railway', value: 'halt' },
+      ];
+    }
+    if (pt.includes('supermercado') || pt.includes('tienda') || pt.includes('bodega')) {
+      return [
+        { key: 'shop', value: 'supermarket' },
+        { key: 'shop', value: 'convenience' },
+      ];
+    }
+    // Fallback: buscar por nombre libre en Nominatim
+    return [];
+  }
+
+  // Geocodifica un texto a lat/lon usando Nominatim
+  private async geocodeLocation(location: string): Promise<{ lat: number; lon: number } | null> {
+    try {
+      const searchLocation = location.toLowerCase().includes('quito') ? location : `${location}, Quito, Ecuador`;
+      const query = encodeURIComponent(searchLocation);
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/search?q=${query}&format=json&limit=1&countrycodes=ec`,
+        { headers: { 'User-Agent': 'WallyntApp/1.0 (wallynt@demo.com)' } }
+      );
+      if (!response.ok) return null;
+      const data: any[] = await response.json();
+      if (!data.length) return null;
+      return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
+    } catch {
+      return null;
+    }
+  }
+
+  // Busca amenidades reales con Overpass API en un radio de 1.5km
+  private async searchWithOverpass(osmTags: { key: string; value: string }[], lat: number, lon: number, radius = 1500) {
+    try {
+      // Construir la query Overpass con todos los tags posibles
+      const tagQueries = osmTags.map(t => `node["${t.key}"="${t.value}"](around:${radius},${lat},${lon});`).join('\n');
+      const overpassQuery = `[out:json][timeout:10];\n(\n${tagQueries}\n);\nout body 5;`;
+
+      const response = await fetch('https://overpass-api.de/api/interpreter', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `data=${encodeURIComponent(overpassQuery)}`,
+      });
+
+      if (!response.ok) return null;
+      const data: any = await response.json();
+      return data.elements as any[];
+    } catch {
+      return null;
+    }
+  }
+
+  // Método principal: geocodifica + Overpass
   private async searchNominatim(placeType: string, location: string) {
     try {
-      const searchLocation = location.toLowerCase().includes('quito') ? location : `${location}, Quito`;
-      const query = encodeURIComponent(`${placeType} cerca de ${searchLocation}`);
-      const response = await fetch(`https://nominatim.openstreetmap.org/search?q=${query}&format=json&limit=4`, {
-        headers: {
-          'User-Agent': 'WallyntApp/1.0',
-        }
-      });
-      if (!response.ok) return [{ error: 'No se pudo conectar al servidor de mapas' }];
-      
-      const data: any[] = await response.json();
-      
-      if (data.length === 0) {
-        return [{ info: 'No se encontraron lugares específicos, sugiere opciones generales para esa zona.' }];
+      // 1. Geocodificar la ubicación del usuario
+      const coords = await this.geocodeLocation(location);
+      if (!coords) {
+        return [{ info: `No pude encontrar la ubicación "${location}" en el mapa. ¿Puedes ser más específico? (ej. nombre del barrio, calle o hito cercano en Quito)` }];
       }
 
-      return data.map(item => ({
-        name: item.display_name.split(',')[0],
-        full_address: item.display_name,
-        type: item.type,
-      }));
+      // 2. Obtener los tags OSM correctos para el tipo de lugar
+      const osmTags = this.getOsmTags(placeType);
+      
+      if (osmTags.length === 0) {
+        // Fallback: búsqueda libre con Nominatim si no reconocemos el tipo
+        const query = encodeURIComponent(`${placeType} ${location}, Quito`);
+        const response = await fetch(`https://nominatim.openstreetmap.org/search?q=${query}&format=json&limit=4&countrycodes=ec`, {
+          headers: { 'User-Agent': 'WallyntApp/1.0 (wallynt@demo.com)' }
+        });
+        const data: any[] = await response.json();
+        if (!data.length) return [{ info: 'No se encontraron resultados para esa búsqueda.' }];
+        return data.map(item => ({
+          name: item.display_name.split(',')[0],
+          type: item.type,
+          lat: item.lat,
+          lon: item.lon,
+        }));
+      }
+
+      // 3. Buscar con Overpass API (más precisa para amenidades reales)
+      const elements = await this.searchWithOverpass(osmTags, coords.lat, coords.lon);
+
+      if (!elements || elements.length === 0) {
+        return [{ info: `No encontré ${placeType} en un radio de 1.5km alrededor de "${location}" en Quito. Prueba con un radio mayor o un punto de referencia diferente.` }];
+      }
+
+      // 4. Calcular distancia aproximada y formatear resultados
+      return elements.slice(0, 5).map(el => {
+        const distKm = this.haversineDistance(coords.lat, coords.lon, el.lat, el.lon);
+        const name = el.tags?.name || el.tags?.['name:es'] || placeType;
+        const address = [el.tags?.['addr:street'], el.tags?.['addr:housenumber']].filter(Boolean).join(' ') || 'dirección no disponible';
+        return {
+          name,
+          address,
+          distance_m: Math.round(distKm * 1000),
+          phone: el.tags?.phone || el.tags?.['contact:phone'] || null,
+        };
+      });
     } catch (e) {
-      console.error('Nominatim error:', e);
+      console.error('Search error:', e);
       return [{ error: 'Error al buscar ubicaciones.' }];
     }
+  }
+
+  // Fórmula de Haversine para calcular distancia entre dos coordenadas
+  private haversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+    const R = 6371;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   }
 }
