@@ -1,4 +1,4 @@
-import { Controller, Get, Patch, Param, UseGuards, Request } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Param, Body, UseGuards, Request } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 import { AnalysisDashboardService } from './services/analysis-dashboard.service';
@@ -14,7 +14,7 @@ export class AnalysisController {
     private readonly analysisPredictionsService: AnalysisPredictionsService,
     private readonly analysisAlertsService: AnalysisAlertsService,
     private readonly analysisAiService: AnalysisAiService,
-  ) { }
+  ) {}
 
   @Get('dashboard')
   getDashboard(@Request() req) {
@@ -49,5 +49,11 @@ export class AnalysisController {
   @Get('ai-recommendations')
   getAiRecommendations(@Request() req) {
     return this.analysisAiService.getPersonalizedRecommendations(req.user.userId);
+  }
+
+  @Post('chat')
+  async chat(@Request() req, @Body('history') history: { role: 'user'|'assistant'|'system', content: string }[]) {
+    const response = await this.analysisAiService.chatWithWallyBot(req.user.userId, history || []);
+    return { response };
   }
 }
