@@ -46,6 +46,18 @@ export class AdminExportExcelService {
       }
     }
 
+    const hoy = new Date();
+    const start30d = new Date(hoy.getTime() - 30 * 86400000).getTime();
+    const gasto30dPorUsuario: Record<string, number> = {};
+
+    for (const m of movs.data || []) {
+      const amt = Number(m.monto);
+      const mDate = new Date(m.fecha).getTime();
+      if (m.tipo === 'GASTO' && mDate >= start30d) {
+        gasto30dPorUsuario[m.usuario_id] = (gasto30dPorUsuario[m.usuario_id] || 0) + amt;
+      }
+    }
+
     // Último análisis por usuario
     const lastAnalisis: Record<string, any> = {};
     for (const a of analisis.data || []) {
@@ -84,17 +96,35 @@ export class AdminExportExcelService {
       };
     });
 
-    // Usuarios en riesgo financiero
+    // Usuarios en riesgo financiero con predicciones
     const riesgoSheet = (usuarios.data || [])
       .map(u => {
         const a = lastAnalisis[u.id];
+        const gastoTotal = gastoPorUsuario[u.id] || 0;
+        const ingresoHist = ingresoTotal[u.id] || 0;
+        
+        let mesesActivos = 1;
+        if (u.fecha_registro) {
+          const fechaReg = new Date(u.fecha_registro);
+          mesesActivos = (hoy.getFullYear() - fechaReg.getFullYear()) * 12 + (hoy.getMonth() - fechaReg.getMonth()) + 1;
+          if (mesesActivos < 1) mesesActivos = 1;
+        }
+        
+        const ingresoFijo = Number(u.ingreso_mensual) || 0;
+        const saldoDisponible = (ingresoFijo * mesesActivos) + ingresoHist - gastoTotal;
+        const promedioGastoDiario = (gasto30dPorUsuario[u.id] || 0) / 30;
+        const diasHastaSinDinero = promedioGastoDiario > 0 ? Math.max(0, Math.floor(saldoDisponible / promedioGastoDiario)) : 999;
+
         return {
           Nombre: u.nombre,
           Correo: u.correo,
           Wally_Score: a?.puntaje_financiero ?? 'Sin datos',
           Nivel_Riesgo: a?.nivel_riesgo ?? 'Sin análisis',
-          Gasto_Real_USD: parseFloat((gastoPorUsuario[u.id] || 0).toFixed(2)),
+          Gasto_Real_USD: parseFloat(gastoTotal.toFixed(2)),
           Gasto_Estimado_USD: Number(u.gasto_estimado) || 0,
+          Saldo_Disponible_USD: parseFloat(saldoDisponible.toFixed(2)),
+          Promedio_Gasto_Diario_USD: parseFloat(promedioGastoDiario.toFixed(2)),
+          Dias_Hasta_Sin_Dinero: diasHastaSinDinero,
           En_Riesgo: a?.nivel_riesgo === 'RIESGO_FINANCIERO' ? 'SÍ 🔴' : 'NO 🟢',
         };
       })
@@ -220,13 +250,30 @@ export class AdminExportExcelService {
 
     xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet(
       (usuarios.data || []).map(u => ({
-        Nombre: u.nombre, Correo: u.correo,
+        Id: u.id, Nombre: u.nombre, Correo: u.correo,
         Trabaja: u.trabaja ? 'Sí' : 'No',
         Ingreso_Mensual: u.ingreso_mensual,
         Gasto_Estimado: u.gasto_estimado,
         Fecha_Registro: u.fecha_registro,
       }))
-    ), 'Usuarios_Detalle');
+    ), 'Dim_Usuarios');
+
+    xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet(
+      (presupuestos.data || []).map(p => ({
+        Usuario: (p.usuarios as any)?.nombre || '',
+        Limite_Monto: p.limite_monto,
+        Categoria: (p.categorias as any)?.nombre || '',
+      }))
+    ), 'Fact_Presupuestos');
+
+    xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet(
+      (analisis.data || []).map(a => ({
+        Usuario: (a.usuarios as any)?.nombre || '',
+        Puntaje_Financiero: a.puntaje_financiero,
+        Nivel_Riesgo: a.nivel_riesgo,
+        Fecha: a.fecha_creacion,
+      }))
+    ), 'Fact_Analisis');
 
     const buffer: Buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
     return buffer.toString('base64');

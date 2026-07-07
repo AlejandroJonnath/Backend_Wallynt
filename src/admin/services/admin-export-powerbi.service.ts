@@ -39,6 +39,23 @@ export class AdminExportPowerBiService {
       }
     }
 
+    const hoy = new Date();
+    const start30d = new Date(hoy.getTime() - 30 * 86400000).getTime();
+    const gasto30dPorUsuario: Record<string, number> = {};
+    const ingresoHistPorUsuario: Record<string, number> = {};
+
+    for (const m of movimientos.data || []) {
+      const amt = Number(m.monto);
+      const mDate = new Date(m.fecha).getTime();
+      if (m.tipo === 'GASTO') {
+        if (mDate >= start30d) {
+          gasto30dPorUsuario[m.usuario_id] = (gasto30dPorUsuario[m.usuario_id] || 0) + amt;
+        }
+      } else {
+        ingresoHistPorUsuario[m.usuario_id] = (ingresoHistPorUsuario[m.usuario_id] || 0) + amt;
+      }
+    }
+
     const lastAnalisis: Record<string, any> = {};
     for (const a of analisis.data || []) {
       if (!lastAnalisis[a.usuario_id]) lastAnalisis[a.usuario_id] = a;
@@ -89,9 +106,24 @@ export class AdminExportPowerBiService {
       };
     });
 
-    // Usuarios en riesgo financiero detallado
+    // Usuarios en riesgo financiero detallado con predicciones
     const usuariosRiesgo = (usuarios.data || []).map(u => {
       const a = lastAnalisis[u.id];
+      const gastoTotal = gastoPorUsuario[u.id] || 0;
+      const ingresoHist = ingresoHistPorUsuario[u.id] || 0;
+      
+      let mesesActivos = 1;
+      if (u.fecha_registro) {
+        const fechaReg = new Date(u.fecha_registro);
+        mesesActivos = (hoy.getFullYear() - fechaReg.getFullYear()) * 12 + (hoy.getMonth() - fechaReg.getMonth()) + 1;
+        if (mesesActivos < 1) mesesActivos = 1;
+      }
+      
+      const ingresoFijo = Number(u.ingreso_mensual) || 0;
+      const saldoDisponible = (ingresoFijo * mesesActivos) + ingresoHist - gastoTotal;
+      const promedioGastoDiario = (gasto30dPorUsuario[u.id] || 0) / 30;
+      const diasHastaSinDinero = promedioGastoDiario > 0 ? Math.max(0, Math.floor(saldoDisponible / promedioGastoDiario)) : 999;
+      
       return {
         usuario_id: u.id,
         nombre: u.nombre,
@@ -99,8 +131,11 @@ export class AdminExportPowerBiService {
         wally_score: a?.puntaje_financiero ?? null,
         nivel_riesgo: a?.nivel_riesgo ?? 'SIN_ANALISIS',
         en_riesgo: a?.nivel_riesgo === 'RIESGO_FINANCIERO',
-        gasto_real: parseFloat((gastoPorUsuario[u.id] || 0).toFixed(2)),
+        gasto_real: parseFloat(gastoTotal.toFixed(2)),
         gasto_estimado: Number(u.gasto_estimado) || 0,
+        saldo_disponible: parseFloat(saldoDisponible.toFixed(2)),
+        promedio_gasto_diario: parseFloat(promedioGastoDiario.toFixed(2)),
+        dias_hasta_sin_dinero: diasHastaSinDinero,
       };
     });
 

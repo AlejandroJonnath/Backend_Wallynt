@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AdminController } from './admin.controller';
 import { SupabaseModule } from '../supabase/supabase.module';
+import { AnalysisModule } from '../analysis/analysis.module';
 
 import { AdminCoreService } from './services/admin-core.service';
 import { AdminKpisService } from './services/admin-kpis.service';
@@ -11,7 +12,7 @@ import { AdminExportExcelService } from './services/admin-export-excel.service';
 import { AdminExportPowerBiService } from './services/admin-export-powerbi.service';
 
 @Module({
-  imports: [SupabaseModule],
+  imports: [SupabaseModule, AnalysisModule],
   controllers: [AdminController],
   providers: [
     AdminCoreService,
