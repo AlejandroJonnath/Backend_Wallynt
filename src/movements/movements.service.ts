@@ -1,6 +1,7 @@
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
 import { AnalysisAlertsService } from '../analysis/services/analysis-alerts.service';
+import { AnalysisDashboardService } from '../analysis/services/analysis-dashboard.service';
 import { CreateMovementDto } from './dto/create-movement.dto';
 import { UpdateMovementDto } from './dto/update-movement.dto';
 
@@ -9,9 +10,18 @@ export class MovementsService {
   constructor(
     private readonly supabaseService: SupabaseService,
     private readonly analysisAlertsService: AnalysisAlertsService,
+    private readonly analysisDashboardService: AnalysisDashboardService,
   ) {}
 
   async create(userId: string, dto: CreateMovementDto) {
+    // Validar que no se puedan registrar gastos si el saldo es insuficiente
+    if (dto.tipo === 'GASTO') {
+      const saldoDisponible = await this.analysisDashboardService.calcularSaldoHistorico(userId);
+      if (saldoDisponible < dto.monto) {
+        throw new BadRequestException('Ya has gastado todo el dinero disponible para este mes.');
+      }
+    }
+
     const supabase = this.supabaseService.getClient();
     const { data, error } = await supabase
       .from('movimientos')
