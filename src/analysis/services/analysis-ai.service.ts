@@ -133,8 +133,8 @@ INSTRUCCIONES CLAVES:
           parameters: {
             type: 'object',
             properties: {
-              location: { type: 'string', description: 'La ubicación o barrio del usuario (ej. "Universidad Católica Quito", "Centro Histórico Lima")' },
-              place_type: { type: 'string', description: 'El tipo de lugar a buscar (ej. "papelería", "restaurante barato", "parada de autobús", "copias")' },
+              location: { type: 'string', description: 'La ubicación, barrio o dirección del usuario. Si el usuario proveyó coordenadas GPS, úsalas literalmente (ej. "lat=-0.1234 lon=-78.5678")' },
+              place_type: { type: 'string', description: 'El tipo de lugar a buscar (ej. "papelería", "restaurante", "parada de bus", "trolebús", "metro")' },
             },
             required: ['location', 'place_type'],
           },
@@ -193,14 +193,19 @@ INSTRUCCIONES CLAVES:
         }
 
         if (needsSecondCall) {
-          // Segunda llamada a Groq con los resultados del mapa
+          // Segunda llamada a Groq: forzar respuesta en texto, sin herramientas
           const secondResponse = await this.groq.chat.completions.create({
             model: 'llama-3.3-70b-versatile',
             messages: messages,
-            tools: tools,
+            tool_choice: 'none',
+            max_tokens: 1200,
           });
 
-          return secondResponse.choices[0]?.message?.content || 'No pude procesar la respuesta final.';
+          const finalContent = secondResponse.choices[0]?.message?.content;
+          if (finalContent) return finalContent;
+
+          // Fallback si Groq aún no responde en texto
+          return 'Encontré opciones en el mapa pero hubo un problema al redactarlas. Inténtalo de nuevo.';
         }
       }
 
@@ -247,9 +252,16 @@ INSTRUCCIONES CLAVES:
     return [];
   }
 
-  // Geocodifica un texto a lat/lon usando Nominatim
+  // Geocodifica un texto a lat/lon usando Nominatim (o extrae coords GPS si ya vienen en el mensaje)
   private async geocodeLocation(location: string): Promise<{ lat: number; lon: number } | null> {
     try {
+      // Si el mensaje incluye coordenadas GPS exactas (formato del frontend)
+      const gpsMatch = location.match(/lat=([\-\d.]+)\s+lon=([\-\d.]+)/);
+      if (gpsMatch) {
+        return { lat: parseFloat(gpsMatch[1]), lon: parseFloat(gpsMatch[2]) };
+      }
+
+      // Fallback: geocodificar con Nominatim
       const searchLocation = location.toLowerCase().includes('quito') ? location : `${location}, Quito, Ecuador`;
       const query = encodeURIComponent(searchLocation);
       const response = await fetch(
