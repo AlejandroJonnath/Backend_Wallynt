@@ -140,6 +140,20 @@ INSTRUCCIONES CLAVES:
           },
         },
       },
+      {
+        type: 'function',
+        function: {
+          name: 'request_user_location',
+          description: 'Pide al usuario su ubicación actual. Úsalo ÚNICAMENTE si el usuario te pide recomendaciones de lugares cercanos y no sabes dónde está.',
+          parameters: {
+            type: 'object',
+            properties: {
+              reason: { type: 'string', description: 'Razón amigable para pedir la ubicación' },
+            },
+            required: ['reason'],
+          },
+        },
+      },
     ];
 
     try {
@@ -157,6 +171,8 @@ INSTRUCCIONES CLAVES:
       if (responseMessage.tool_calls) {
         messages.push(responseMessage); // Guardar la llamada a la herramienta en el historial
 
+        let needsSecondCall = false;
+
         for (const toolCall of responseMessage.tool_calls) {
           if (toolCall.function.name === 'search_nearby_places') {
             const args = JSON.parse(toolCall.function.arguments);
@@ -168,16 +184,24 @@ INSTRUCCIONES CLAVES:
               name: 'search_nearby_places',
               content: JSON.stringify(searchResults),
             });
+            needsSecondCall = true;
+          } else if (toolCall.function.name === 'request_user_location') {
+            // Retorna una señal especial para el frontend
+            const args = JSON.parse(toolCall.function.arguments);
+            return JSON.stringify({ _action: 'REQUEST_LOCATION', reason: args.reason });
           }
         }
 
-        // Segunda llamada a Groq con los resultados del mapa
-        const secondResponse = await this.groq.chat.completions.create({
-          model: 'llama-3.3-70b-versatile',
-          messages: messages,
-        });
+        if (needsSecondCall) {
+          // Segunda llamada a Groq con los resultados del mapa
+          const secondResponse = await this.groq.chat.completions.create({
+            model: 'llama-3.3-70b-versatile',
+            messages: messages,
+            tools: tools,
+          });
 
-        return secondResponse.choices[0]?.message?.content || 'No pude procesar la respuesta final.';
+          return secondResponse.choices[0]?.message?.content || 'No pude procesar la respuesta final.';
+        }
       }
 
       return responseMessage.content || 'Hubo un error al procesar tu solicitud.';
