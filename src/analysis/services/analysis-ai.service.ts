@@ -63,35 +63,68 @@ export class AnalysisAiService {
     const problematicExpenses = await this.getRecentProblematicExpenses(userId);
 
     let greeting = '';
-    
-    // Si hay un gasto problemático reciente, el saludo cambia
+    let tips: { icon: string; title: string; description: string }[] = [];
+
     if (problematicExpenses.length > 0) {
       const exp = problematicExpenses[0];
       const cat = (exp.categorias as any)?.nombre?.toLowerCase() || '';
-      
+
       if (cat.includes('educ')) {
-        greeting = `¡Hey! Noté que gastaste $${exp.monto} en ${exp.descripcion || 'educación'}. Si me dices tu ubicación, puedo buscarte papelerías o lugares más baratos cercanos.`;
+        greeting = `¡Hey! Noté que gastaste $${exp.monto} en ${exp.descripcion || 'educación'}. Aquí tienes consejos para reducir esos gastos 📚`;
+        tips = [
+          { icon: '📋', title: 'Compara precios de copias', description: 'Busca papelerías alternativas en tu barrio, los precios pueden variar hasta un 50%.' },
+          { icon: '📱', title: 'Usa apps de estudio gratis', description: 'Google Docs, Notion y Canva te ayudan a reducir impresiones innecesarias.' },
+          { icon: '🤝', title: 'Comparte materiales', description: 'Coordina con compañeros para dividir costos de fotocopias e impresiones.' },
+        ];
       } else if (cat.includes('transporte')) {
-        greeting = `¡Hey! Vi un gasto reciente de $${exp.monto} en transporte y tu saldo es $${dashboardData.saldoDisponible.toFixed(2)}. ¿A dónde necesitas ir? Puedo sugerirte rutas de autobús económicas.`;
+        greeting = `¡Hey! Vi un gasto de $${exp.monto} en transporte. Con tu saldo de $${dashboardData.saldoDisponible.toFixed(2)}, te recomiendo estas opciones 🚌`;
+        tips = [
+          { icon: '🚌', title: 'Usa el Trolebús y Ecovía', description: 'El transporte público en Quito cuesta $0.45 y es una alternativa económica.' },
+          { icon: '🚶', title: 'Camina distancias cortas', description: 'Si el destino está a menos de 20 min, caminar ahorra dinero y es saludable.' },
+          { icon: '👥', title: 'Comparte taxi con amigos', description: 'Dividir el costo de un taxi entre 3-4 personas puede ser más barato que viajar solo.' },
+        ];
       } else if (cat.includes('comida') || cat.includes('alimenta')) {
-        greeting = `¡Hey! Gastaste $${exp.monto} en ${exp.descripcion || 'comida'}. Si me dices por dónde estás, te busco opciones de almuerzos o aperitivos más económicos cerca de ti.`;
+        greeting = `¡Hey! Gastaste $${exp.monto} en ${exp.descripcion || 'comida'}. Te dejo tips para ahorrar en alimentación 🍽️`;
+        tips = [
+          { icon: '🍱', title: 'Prepara tu almuerzo en casa', description: 'Cocinar en casa puede ahorrarte hasta $3 por comida al día.' },
+          { icon: '📍', title: 'Busca menús del día', description: 'Los restaurantes cercanos a universidades suelen tener menús económicos de $2-3.' },
+          { icon: '🛒', title: 'Compra en mercados locales', description: 'Los mercados municipales tienen frutas y verduras a menor precio que los supermercados.' },
+        ];
       } else {
-        greeting = `¡Hey! Tu situación financiera podría mejorar. ¡Chatea conmigo para encontrar opciones más baratas!`;
+        greeting = `¡Hey! Detecté gastos que podrían optimizarse. Aquí van mis recomendaciones 💡`;
+        tips = [
+          { icon: '📊', title: 'Registra todos tus gastos', description: 'Anotar cada gasto te permite identificar en qué estás gastando de más.' },
+          { icon: '💰', title: 'Establece un límite diario', description: 'Define cuánto puedes gastar por día para no exceder tu presupuesto mensual.' },
+          { icon: '🎯', title: 'Prioriza tus necesidades', description: 'Clasifica tus gastos en necesarios y prescindibles para tomar mejores decisiones.' },
+        ];
       }
     } else {
-      greeting = puntaje_financiero < 50
-        ? '¡Hey! Tu situación necesita atención. ¡Juntos lo resolvemos! ¿En qué ciudad o sector te encuentras?'
-        : '¡Hey! Veo que tienes margen para mejorar tu salud financiera. ¡Yo te guío!';
+      if (puntaje_financiero < 50) {
+        greeting = '¡Hey! Tu situación financiera necesita atención urgente. ¡Vamos a mejorarla juntos! 🚨';
+        tips = [
+          { icon: '🛑', title: 'Reduce gastos inmediatamente', description: 'Identifica y elimina gastos no esenciales para estabilizar tu economía.' },
+          { icon: '💵', title: 'Busca ingresos adicionales', description: 'Considera trabajos part-time o venta de servicios para aumentar tus ingresos.' },
+          { icon: '📋', title: 'Crea un presupuesto estricto', description: 'Asigna montos fijos a cada categoría de gasto y respétalos.' },
+        ];
+      } else {
+        greeting = '¡Hey! Tienes margen para mejorar tu salud financiera. Aquí van mis consejos 😊';
+        tips = [
+          { icon: '💡', title: 'Ahorra el 10% de tus ingresos', description: 'Reserva automáticamente un porcentaje antes de gastar para crear un fondo de emergencia.' },
+          { icon: '📈', title: 'Revisa tus gastos semanalmente', description: 'Una revisión semanal te permite corregir el rumbo antes de fin de mes.' },
+          { icon: '🎓', title: 'Aprovecha descuentos estudiantiles', description: 'Presenta tu carnet en transporte, cines y restaurantes para obtener precios preferenciales.' },
+        ];
+      }
     }
 
     return {
       greeting,
-      tips: [], // Ya no usaremos tips estáticos en el chat
+      tips,
       score: puntaje_financiero,
       nivel_riesgo,
-      hasContextMsg: problematicExpenses.length > 0
+      hasContextMsg: problematicExpenses.length > 0,
     };
   }
+
 
   // Chat conversacional con Tool Calling a Nominatim (Maps API gratuita)
   async chatWithWallyBot(userId: string, history: { role: 'user'|'assistant'|'system', content: string }[]) {
