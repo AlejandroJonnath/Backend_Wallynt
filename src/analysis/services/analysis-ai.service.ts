@@ -16,7 +16,7 @@ export class AnalysisAiService {
     private readonly supabaseService: SupabaseService,
   ) {
     this.groq = new Groq({
-      apiKey: this.configService.get<string>('GROQ_API_KEY'),
+      apiKey: (this.configService.get<string>('GROQ_API_KEY_PART1') || '') + (this.configService.get<string>('GROQ_API_KEY_PART2') || ''),
     });
   }
 
